@@ -51,8 +51,13 @@ def clean_name(name: str) -> str:
 
 
 def load_staff(client: PancakeClient, shop_id: str) -> dict[str, dict]:
-    """Trả về map: user_id -> {"name": tên, "dept": tên bộ phận}."""
+    """Trả về map: user_id -> {"name": tên, "dept": tên bộ phận}.
+
+    Đồng thời lưu danh sách nhân viên thô vào api_data/nhanvien.json."""
+    import luu_tru
+
     users = client.get_users(shop_id)
+    luu_tru.luu_nhan_vien(users)
     staff = {}
     for u in users:
         uid = u.get("user_id") or (u.get("user") or {}).get("id")
@@ -114,7 +119,7 @@ def fetch_day(
             if s["dept"] in dept_filter:
                 by_seller[uid] = _blank_seller(s["name"], s["dept"])
 
-    for o in client.iter_orders(shop_id, start_ts, end_ts, page_size=500):
+    for o in client.iter_orders(shop_id, start_ts, end_ts, page_size=config.ORDERS_PAGE_SIZE):
         total_orders += 1
         status_code = o.get("status")
         status = config.ORDER_STATUS.get(status_code, f"Mã {status_code}")

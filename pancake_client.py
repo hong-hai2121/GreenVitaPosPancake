@@ -7,19 +7,11 @@ Xác thực: truyền api_key qua query string.
 """
 from __future__ import annotations
 
-import json
-import shutil
-from datetime import datetime
-from pathlib import Path
 from typing import Iterator, Optional
 
 import requests
 
 BASE_URL = "https://pos.pages.fm/api/v1"
-
-# Thư mục lưu dữ liệu thô nhận về từ API - xóa sạch mỗi lần chạy mới,
-# chỉ giữ dữ liệu của lần chạy gần nhất
-API_DATA_DIR = Path(__file__).resolve().parent / "api_data"
 
 
 class PancakeError(Exception):
@@ -27,33 +19,10 @@ class PancakeError(Exception):
 
 
 class PancakeClient:
-    def __init__(self, api_key: str, timeout: int = 30, dump: bool = True):
+    def __init__(self, api_key: str, timeout: int = 30):
         self.api_key = api_key
         self.timeout = timeout
         self.session = requests.Session()
-        self.dump = dump
-        self._dump_seq = 0
-        if dump:
-            # Xóa dữ liệu của lần chạy trước, bắt đầu thư mục trống
-            shutil.rmtree(API_DATA_DIR, ignore_errors=True)
-            API_DATA_DIR.mkdir(exist_ok=True)
-
-    def _dump_response(self, path: str, params: dict, data) -> None:
-        """Lưu phản hồi thô của 1 call API ra file JSON trong api_data/."""
-        self._dump_seq += 1
-        name = path.strip("/").replace("/", "_")
-        if params.get("page_number"):
-            name += f"_trang{params['page_number']}"
-        safe_params = {k: v for k, v in params.items() if k != "api_key"}
-        payload = {
-            "url": f"{BASE_URL}{path}",
-            "params": safe_params,
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
-            "response": data,
-        }
-        out = API_DATA_DIR / f"{self._dump_seq:03d}_{name}.json"
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=1)
 
     def _get(self, path: str, params: Optional[dict] = None) -> dict:
         params = dict(params or {})
@@ -76,9 +45,6 @@ class PancakeClient:
 
         if isinstance(data, dict) and data.get("success") is False:
             raise PancakeError(f"API báo lỗi khi gọi {path}: {data.get('message') or data}")
-
-        if self.dump:
-            self._dump_response(path, params, data)
         return data
 
     # ------------------------------------------------------------------
@@ -100,18 +66,22 @@ class PancakeClient:
         page_number: int = 1,
         page_size: int = 100,
         update_status: str = "inserted_at",
+        filter_status: Optional[list[int]] = None,
     ) -> dict:
-        """Một trang đơn hàng trong khoảng thời gian [start_ts, end_ts] (unix giây)."""
-        return self._get(
-            f"/shops/{shop_id}/orders",
-            {
-                "startDateTime": start_ts,
-                "endDateTime": end_ts,
-                "updateStatus": update_status,  # lọc theo mốc thời gian tạo đơn
-                "page_number": page_number,
-                "page_size": page_size,
-            },
-        )
+        """Một trang đơn hàng trong khoảng thời gian [start_ts, end_ts] (unix giây).
+
+        filter_status: chỉ lấy đơn đang ở các trạng thái này (vd [4, 5] = đơn hoàn).
+        """
+        params = {
+            "startDateTime": start_ts,
+            "endDateTime": end_ts,
+            "updateStatus": update_status,  # lọc theo mốc thời gian tạo đơn
+            "page_number": page_number,
+            "page_size": page_size,
+        }
+        if filter_status:
+            params["filter_status[]"] = list(filter_status)
+        return self._get(f"/shops/{shop_id}/orders", params)
 
     def iter_orders(
         self,

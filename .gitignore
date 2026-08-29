@@ -4,5 +4,7 @@ __pycache__/
 *.pyc
 output/
 api_data/
+logs/
+cai_dat_app.json
 .venv/
 venv/

@@ -14,6 +14,12 @@ PANCAKE_SHOP_ID = os.getenv("PANCAKE_SHOP_ID", "").strip()
 # Múi giờ tính doanh thu theo ngày
 TIMEZONE = "Asia/Ho_Chi_Minh"
 
+# Số đơn tối đa mỗi call API (server Pancake giới hạn cứng <= 1000)
+ORDERS_PAGE_SIZE = 1000
+
+# Giữ dữ liệu thô trong api_data/ của bao nhiêu tháng gần nhất
+API_DATA_THANG_GIU = 2
+
 # ---- Google Sheets (tùy chọn, dùng với cờ --gsheet) ----
 # File service account (đã copy từ dự án ADS_facebook)
 SERVICE_ACCOUNT_FILE = BASE_DIR / os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "service_account.json")
@@ -34,28 +40,45 @@ CLOSED_STATUSES = {1, 2, 3, 8, 9, 15, 16}
 # ĐƠN HOÀN - 4: Đang hoàn, 5: Đã hoàn
 RETURN_STATUSES = {4, 5}
 
-# CÔNG THỨC THƯỞNG NGÀY (bảng "Đề Xuất chi thưởng GR")
+# CÔNG THỨC THƯỞNG NGÀY (bảng "Đề Xuất chi thưởng GR") - THEO TỪNG NHÓM BỘ PHẬN
 # Mỗi dòng: (mốc doanh số ngày, tiền thưởng) - doanh số ĐẠT mốc (>=) nào cao nhất
-# thì nhận thưởng mốc đó (vd: đúng 5.000.000 -> thưởng 50.000).
-
-# Ngày thường (Thứ 2 - Thứ 7)
-BONUS_TIERS = [
-    (25_000_000, 400_000),
-    (22_000_000, 300_000),
-    (18_000_000, 200_000),
-    (14_000_000, 150_000),
-    (10_000_000, 100_000),
-    (5_000_000, 50_000),
-]
-
-# Riêng CHỦ NHẬT thưởng theo mức cao hơn
-BONUS_TIERS_SUNDAY = [
-    (22_000_000, 350_000),
-    (18_000_000, 300_000),
-    (14_000_000, 250_000),
-    (10_000_000, 200_000),
-    (5_000_000, 150_000),
-]
+# thì nhận thưởng mốc đó (vd: đúng 5.000.000 -> thưởng theo mốc 5tr).
+# "weekday" = Thứ 2 - Thứ 7; "sunday" = riêng Chủ nhật (mức cao hơn).
+BONUS_TIERS_BY_GROUP = {
+    "sale": {
+        "weekday": [
+            (25_000_000, 400_000),
+            (22_000_000, 300_000),
+            (18_000_000, 200_000),
+            (14_000_000, 150_000),
+            (10_000_000, 100_000),
+            (5_000_000, 50_000),
+        ],
+        "sunday": [
+            (22_000_000, 350_000),
+            (18_000_000, 300_000),
+            (14_000_000, 250_000),
+            (10_000_000, 200_000),
+            (5_000_000, 150_000),
+        ],
+    },
+    "cskh": {
+        "weekday": [
+            (22_000_000, 250_000),
+            (18_000_000, 200_000),
+            (14_000_000, 150_000),
+            (10_000_000, 100_000),
+            (5_000_000, 50_000),
+        ],
+        "sunday": [
+            (22_000_000, 350_000),
+            (18_000_000, 300_000),
+            (14_000_000, 250_000),
+            (10_000_000, 200_000),
+            (5_000_000, 150_000),
+        ],
+    },
+}
 
 # Ý nghĩa mã trạng thái đơn hàng của Pancake POS
 ORDER_STATUS = {

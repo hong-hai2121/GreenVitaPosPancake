@@ -14,9 +14,48 @@ PANCAKE_SHOP_ID = os.getenv("PANCAKE_SHOP_ID", "").strip()
 # Múi giờ tính doanh thu theo ngày
 TIMEZONE = "Asia/Ho_Chi_Minh"
 
-# Các trạng thái đơn KHÔNG tính vào doanh thu
-# 4: Đang hoàn, 5: Đã hoàn, 6: Đã hủy, 7: Đã xóa
-EXCLUDED_STATUSES = {4, 5, 6, 7}
+# ---- Google Sheets (tùy chọn, dùng với cờ --gsheet) ----
+# File service account (đã copy từ dự án ADS_facebook)
+SERVICE_ACCOUNT_FILE = BASE_DIR / os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "service_account.json")
+# ID Google Sheet đích; để trống thì lần chạy --gsheet đầu tiên sẽ tự tạo sheet mới
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "").strip()
+# Email được chia sẻ quyền chỉnh sửa khi tự tạo sheet mới
+GOOGLE_SHARE_EMAIL = os.getenv("GOOGLE_SHARE_EMAIL", "").strip()
+GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+# ĐƠN CHỐT - các trạng thái được tính vào doanh thu (giống báo cáo POS):
+# 1: Đã xác nhận, 2: Đã gửi hàng, 3: Đã nhận, 8: Đang đóng hàng,
+# 9: Chờ chuyển hàng, 15: Hoàn 1 phần, 16: Đã thu tiền
+CLOSED_STATUSES = {1, 2, 3, 8, 9, 15, 16}
+
+# ĐƠN HOÀN - 4: Đang hoàn, 5: Đã hoàn
+RETURN_STATUSES = {4, 5}
+
+# CÔNG THỨC THƯỞNG NGÀY (bảng "Đề Xuất chi thưởng GR")
+# Mỗi dòng: (mốc doanh số ngày, tiền thưởng) - doanh số ĐẠT mốc (>=) nào cao nhất
+# thì nhận thưởng mốc đó (vd: đúng 5.000.000 -> thưởng 50.000).
+
+# Ngày thường (Thứ 2 - Thứ 7)
+BONUS_TIERS = [
+    (25_000_000, 400_000),
+    (22_000_000, 300_000),
+    (18_000_000, 200_000),
+    (14_000_000, 150_000),
+    (10_000_000, 100_000),
+    (5_000_000, 50_000),
+]
+
+# Riêng CHỦ NHẬT thưởng theo mức cao hơn
+BONUS_TIERS_SUNDAY = [
+    (22_000_000, 350_000),
+    (18_000_000, 300_000),
+    (14_000_000, 250_000),
+    (10_000_000, 200_000),
+    (5_000_000, 150_000),
+]
 
 # Ý nghĩa mã trạng thái đơn hàng của Pancake POS
 ORDER_STATUS = {

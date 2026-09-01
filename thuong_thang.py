@@ -303,8 +303,9 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
         stats[uid] = s
     # Cột Thưởng của BC02 = Tổng tháng trên 2 tab GR vừa ghi (khớp theo tên NV)
     bonus_totals = read_gr_bonus_totals(month, year)
-    # Đơn tháng trước hoàn về trong tháng này (1 call, đọc status_history)
-    hoan_truoc = dem_hoan_thang_truoc(client, shop_id, year, month, tz)
+    # Đơn hoàn tháng trước: TẠM THỜI để 0 theo yêu cầu
+    # (bật lại: hoan_truoc = dem_hoan_thang_truoc(client, shop_id, year, month, tz))
+    hoan_truoc: dict[str, int] = {}
     values = bc02_build_table(month, year, roster_all, stats,
                               bc02_parse_old_manual(old_bc02), title_suffix,
                               bonus_totals=bonus_totals, hoan_truoc=hoan_truoc)

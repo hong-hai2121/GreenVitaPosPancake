@@ -114,14 +114,15 @@ python bc02_thuong_ds.py 2026-07    # tháng cụ thể
 
 - Gồm TẤT CẢ nhân viên các bộ phận có chữ sale hoặc cskh, dòng Tổng nằm ngay dưới header
 - Cột từ API: Đơn chốt, Đơn hoàn tháng này, DS bán hàng (= tổng tiền đơn chốt)
-- Cột **Đơn hoàn tháng trước** = đơn tạo tháng trước bị chuyển sang hoàn TRONG tháng này
-  (1 call API lấy đơn hoàn của tháng trước rồi đọc `status_history` để biết thời điểm hoàn)
+- Cột **Đơn hoàn tháng trước**: TẠM THỜI để 0 theo yêu cầu (code tính thật đã có sẵn -
+  hàm `dem_hoan_thang_truoc` đọc `status_history`, khi cần bật lại chỉ 1 dòng)
 - **Tỷ lệ hoàn** = (hoàn tháng này + hoàn tháng trước) / đơn chốt
 - Cột **Thưởng** = cột "Tổng tháng" trên 2 tab Thưởng Sale/CSKH GR, tự mang qua
   khớp theo tên nhân viên
 - Cột công thức trên sheet: Tỷ lệ hoàn = hoàn/(chốt+hoàn); Thực nhận = Thưởng x % Thưởng
   (% trống hiểu là 100%). Công thức dùng dấu `;` vì sheet locale Việt Nam
-- Cột **% Thưởng** (nền vàng): NHẬP TAY trên sheet - chạy lại script vẫn giữ nguyên
+- Cột **% Thưởng**: mặc định điền sẵn **100%**, chỉnh tay trên sheet thì
+  chạy lại script vẫn giữ nguyên giá trị đã chỉnh; **Thực nhận = Thưởng x % Thưởng**
 
 ## Ứng dụng desktop + lịch chạy tự động 9h sáng
 

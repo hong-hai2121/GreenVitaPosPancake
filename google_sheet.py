@@ -196,24 +196,8 @@ def _style_month_table(ss, ws, n_rows: int, n_cols: int, n_fixed_cols: int = 3,
     req.append(repeat(grid(total_row, n_rows, 0, n_cols),
                       {"backgroundColor": C_TOTALROW_BG, "textFormat": {"bold": True}},
                       "userEnteredFormat(backgroundColor,textFormat.bold)"))
-    # 8. Ô đạt thưởng (>0) trong vùng cột ngày: nền xanh, chữ xanh đậm (conditional
-    #    formatting nên sửa số trực tiếp trên sheet màu vẫn tự cập nhật)
-    req.append({"addConditionalFormatRule": {"index": 0, "rule": {
-        "ranges": [grid(data_r0, data_r1, day_c0, day_c1)],
-        "booleanRule": {
-            "condition": {"type": "NUMBER_GREATER", "values": [{"userEnteredValue": "0"}]},
-            "format": {"backgroundColor": C_BONUS_BG,
-                       "textFormat": {"bold": True, "foregroundColor": C_BONUS_TEXT}},
-        }}}})
-    # 8b. Ô đạt thưởng CHỦ NHẬT: tô cam thay vì xanh (index 0 -> ưu tiên hơn rule xanh)
-    if sunday_cols:
-        req.append({"addConditionalFormatRule": {"index": 0, "rule": {
-            "ranges": [grid(data_r0, data_r1, c, c + 1) for c in sunday_cols],
-            "booleanRule": {
-                "condition": {"type": "NUMBER_GREATER", "values": [{"userEnteredValue": "0"}]},
-                "format": {"backgroundColor": C_SUNDAY_BONUS_BG,
-                           "textFormat": {"bold": True, "foregroundColor": C_SUNDAY_BONUS_TEXT}},
-            }}}})
+    # 8. Ô đạt thưởng KHÔNG tô màu riêng nữa (theo yêu cầu: giá trị thưởng màu bình thường).
+    #    Các rule tô màu cũ đã bị xóa ở bước _delete_conditional_rules phía trên.
     # 9. Kẻ khung cả bảng
     border = {"style": "SOLID", "color": C_BORDER}
     req.append({"updateBorders": {"range": grid(1, n_rows, 0, n_cols),
@@ -300,11 +284,7 @@ def _style_bc02(ss, ws, n_rows: int, n_cols: int) -> None:
         req.append(repeat(grid(total_r, n_rows, c, c + 1),
                           {"numberFormat": {"type": "PERCENT", "pattern": "0.0%"}},
                           "userEnteredFormat.numberFormat"))
-    # Cột nhập tay: chỉ % Thưởng (J=9) - nền vàng nhạt
-    # (cột Thưởng I tự lấy từ Tổng tháng của 2 tab Thưởng GR, không nhập tay)
-    req.append(repeat(grid(data_r0, data_r1, 9, 10),
-                      {"backgroundColor": C_MANUAL_BG},
-                      "userEnteredFormat.backgroundColor"))
+    # Cột % Thưởng để màu bình thường (vẫn chỉnh tay được, script giữ giá trị đã chỉnh)
     # Cột Thực nhận (J=9): vàng đậm hơn + in đậm
     req.append(repeat(grid(total_r, n_rows, n_cols - 1, n_cols),
                       {"backgroundColor": C_TOTALCOL_BG, "textFormat": {"bold": True}},

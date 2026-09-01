@@ -186,9 +186,10 @@ def build_table(month: int, year: int, roster: list[tuple[str, dict]],
         r = 3 + idx
         s = stats.get(uid, {"chot": 0, "hoan": 0, "ds": 0})
         # Thưởng = Tổng tháng từ tab Thưởng Sale/CSKH GR (khớp theo tên);
-        # % Thưởng vẫn nhập tay (giữ nguyên giá trị cũ trên sheet)
+        # % Thưởng mặc định 100%, chỉnh tay trên sheet thì giữ nguyên giá trị đã chỉnh
         thuong = bonus_totals.get(info["name"], "") or ""
         _, pct = old_manual.get(info["name"], ("", ""))
+        pct = pct or "100%"
         values.append([
             idx, info["name"], info["dept"],
             s["chot"], s["hoan"], hoan_truoc.get(uid, 0), s["ds"],
@@ -260,7 +261,8 @@ def main() -> None:
     bonus_totals = read_gr_bonus_totals(month, year)
     if not bonus_totals:
         print("CHÚ Ý: chưa đọc được cột Tổng tháng từ 2 tab Thưởng GR - cột Thưởng sẽ trống.")
-    hoan_truoc = dem_hoan_thang_truoc(client, shop_id, year, month, tz)
+    # Đơn hoàn tháng trước: TẠM THỜI để 0 theo yêu cầu (bật lại bằng dem_hoan_thang_truoc)
+    hoan_truoc: dict[str, int] = {}
     values = build_table(month, year, roster, stats, old_manual,
                          bonus_totals=bonus_totals, hoan_truoc=hoan_truoc)
     url = google_sheet.write_bc02_table(tab_title, values)

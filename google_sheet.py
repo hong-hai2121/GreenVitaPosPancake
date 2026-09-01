@@ -7,14 +7,49 @@
 """
 from __future__ import annotations
 
+import functools
 import re
+import time
 
 import gspread
+import requests
 from google.oauth2.service_account import Credentials
 
 import config
 
 SPREADSHEET_NAME = "Doanh Thu GreenVita POS"
+
+# Google thỉnh thoảng trả 429/5xx tạm thời (họ khuyên "try again in 30 seconds")
+_RETRY_STATUS = {429, 500, 502, 503}
+_RETRY_DELAYS = (15, 30, 60, 120)  # giây chờ trước mỗi lần thử lại
+
+
+def _is_transient(e: Exception) -> bool:
+    if isinstance(e, gspread.exceptions.APIError):
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        return status in _RETRY_STATUS
+    return isinstance(e, (requests.exceptions.ConnectionError,
+                          requests.exceptions.Timeout))
+
+
+def _with_retry(fn):
+    """Tự thử lại khi Google Sheets trả lỗi tạm thời (429/5xx) hoặc rớt mạng.
+
+    Chỉ bọc các hàm idempotent (đọc, hoặc ghi đè toàn bộ tab) nên chạy lại an toàn.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        for delay in _RETRY_DELAYS:
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                if not _is_transient(e):
+                    raise
+                print(f"  Google Sheets lỗi tạm thời ({type(e).__name__}), "
+                      f"thử lại sau {delay}s ...", flush=True)
+                time.sleep(delay)
+        return fn(*args, **kwargs)
+    return wrapper
 
 
 def _col_letter(n: int) -> str:
@@ -57,6 +92,7 @@ def _spreadsheet() -> "gspread.Spreadsheet":
     return _cached_ss
 
 
+@_with_retry
 def read_table(tab_title: str) -> list[list[str]] | None:
     """Đọc toàn bộ giá trị (đã định dạng) của 1 tab; None nếu tab chưa tồn tại."""
     ss = _spreadsheet()
@@ -309,6 +345,7 @@ def _style_bc02(ss, ws, n_rows: int, n_cols: int) -> None:
     ss.batch_update({"requests": req})
 
 
+@_with_retry
 def write_bc02_table(tab_title: str, values: list[list]) -> str:
     """Ghi đè + tô màu tab BC02 (thưởng doanh số tháng). Trả về URL spreadsheet."""
     ss = _spreadsheet()
@@ -322,6 +359,7 @@ def write_bc02_table(tab_title: str, values: list[list]) -> str:
     return ss.url
 
 
+@_with_retry
 def write_table(tab_title: str, values: list[list], money_range: str | None = None,
                 sunday_cols: list[int] | None = None) -> str:
     """Ghi đè toàn bộ 1 tab bằng ma trận `values` (bảng thưởng tháng) rồi tô màu.

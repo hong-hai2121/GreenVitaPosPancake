@@ -160,10 +160,12 @@ def _delete_conditional_rules(ss, sheet_id: int) -> list[dict]:
 
 
 def _style_month_table(ss, ws, n_rows: int, n_cols: int, n_fixed_cols: int = 3,
-                       sunday_cols: list[int] | None = None) -> None:
+                       sunday_cols: list[int] | None = None,
+                       extra_block: tuple[int, int, int] | None = None) -> None:
     """Tô màu bảng thưởng: title, header, sọc xen kẽ, ô đạt thưởng, tổng, khung, độ rộng cột.
 
     sunday_cols: chỉ số cột (0-based) của các ngày Chủ nhật -> tô tông cam nhận biết.
+    extra_block: (dòng bắt đầu 0-based, số dòng, số cột) của khối quy tắc thưởng phía dưới.
     """
     sunday_cols = sunday_cols or []
     sid = ws.id
@@ -181,7 +183,10 @@ def _style_month_table(ss, ws, n_rows: int, n_cols: int, n_fixed_cols: int = 3,
 
     req = []
     # 0. Xóa định dạng cũ toàn vùng bảng (chạy lại không bị lem màu cũ)
-    req.append(repeat(grid(0, n_rows + 5, 0, n_cols + 2), {}, "userEnteredFormat"))
+    reset_rows = n_rows + 5
+    if extra_block:
+        reset_rows = max(reset_rows, extra_block[0] + extra_block[1] + 5)
+    req.append(repeat(grid(0, reset_rows, 0, n_cols + 2), {}, "userEnteredFormat"))
     req += _delete_conditional_rules(ss, sid)
 
     # 1. Tiêu đề
@@ -252,6 +257,29 @@ def _style_month_table(ss, ws, n_rows: int, n_cols: int, n_fixed_cols: int = 3,
         "properties": {"sheetId": sid,
                        "gridProperties": {"frozenRowCount": 2, "frozenColumnCount": 3}},
         "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}})
+
+    # 12. Khối QUY TẮC THƯỞNG phía dưới bảng (bắt đầu từ cột B)
+    if extra_block:
+        b_r0, b_n, b_w = extra_block
+        c0, c1 = 1, 1 + b_w
+        req.append(repeat(grid(b_r0, b_r0 + 1, c0, c1),
+                          {"textFormat": {"bold": True, "foregroundColor": C_TITLE_TEXT}},
+                          "userEnteredFormat.textFormat"))
+        req.append(repeat(grid(b_r0 + 1, b_r0 + 2, c0, c1),
+                          {"backgroundColor": C_HEADER_BG,
+                           "textFormat": {"bold": True, "foregroundColor": C_WHITE},
+                           "horizontalAlignment": "CENTER",
+                           "wrapStrategy": "WRAP"},
+                          "userEnteredFormat(backgroundColor,textFormat,"
+                          "horizontalAlignment,wrapStrategy)"))
+        req.append(repeat(grid(b_r0 + 2, b_r0 + b_n, c0, c1),
+                          {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+                          "userEnteredFormat.numberFormat"))
+        border = {"style": "SOLID", "color": C_BORDER}
+        req.append({"updateBorders": {"range": grid(b_r0 + 1, b_r0 + b_n, c0, c1),
+                                      "top": border, "bottom": border, "left": border,
+                                      "right": border, "innerHorizontal": border,
+                                      "innerVertical": border}})
 
     ss.batch_update({"requests": req})
 
@@ -361,15 +389,18 @@ def write_bc02_table(tab_title: str, values: list[list]) -> str:
 
 @_with_retry
 def write_table(tab_title: str, values: list[list], money_range: str | None = None,
-                sunday_cols: list[int] | None = None) -> str:
+                sunday_cols: list[int] | None = None,
+                rules_block: list[list] | None = None) -> str:
     """Ghi đè toàn bộ 1 tab bằng ma trận `values` (bảng thưởng tháng) rồi tô màu.
 
     - Dòng 1: tiêu đề; dòng 2: header; dòng cuối: Tổng; 3 cột đầu cố định.
+    - rules_block: khối quy tắc thưởng ghi thêm phía dưới bảng (bắt đầu cột B).
     Trả về URL của spreadsheet.
     """
     ss = _spreadsheet()
 
-    n_rows = max(len(values) + 5, 50)
+    block_rows = len(rules_block) + 3 if rules_block else 0
+    n_rows = max(len(values) + block_rows + 5, 50)
     n_cols = max(len(values[1]) + 2, 10)
     for ws in ss.worksheets():
         if ws.title == tab_title:
@@ -384,6 +415,17 @@ def write_table(tab_title: str, values: list[list], money_range: str | None = No
     end = _col_letter(len(values[1]))
     ws.update(values=values, range_name=f"A1:{end}{len(values)}",
               value_input_option="USER_ENTERED")
+
+    extra = None
+    if rules_block:
+        start_row = len(values) + 2                       # cách bảng 1 dòng trống
+        width = max(len(r) for r in rules_block)
+        end_b = _col_letter(1 + width)                    # bắt đầu từ cột B
+        ws.update(values=rules_block,
+                  range_name=f"B{start_row}:{end_b}{start_row + len(rules_block) - 1}",
+                  value_input_option="USER_ENTERED")
+        extra = (start_row - 1, len(rules_block), width)  # 0-based cho styling
+
     _style_month_table(ss, ws, n_rows=len(values), n_cols=len(values[1]),
-                       sunday_cols=sunday_cols)
+                       sunday_cols=sunday_cols, extra_block=extra)
     return ss.url

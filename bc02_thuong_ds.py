@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 
 import config
 import google_sheet
-from doanh_thu import load_staff, seller_of, vnd
+from doanh_thu import load_staff, roster_sort_key, seller_of, vnd
 from pancake_client import PancakeClient, PancakeError
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -249,7 +249,7 @@ def main() -> None:
     roster = sorted(
         ((uid, info) for uid, info in staff.items()
          if any(kw in info["dept"].lower() for kw in GROUP_KEYWORDS)),
-        key=lambda x: (x[1]["dept"], x[1]["name"]),
+        key=roster_sort_key,
     )
     print(f"Bảng gồm {len(roster)} nhân viên các bộ phận Sale + CSKH")
     print(f"Lấy đơn hàng {first.strftime('%d/%m')} - {last.strftime('%d/%m/%Y')} từ Pancake POS ...")

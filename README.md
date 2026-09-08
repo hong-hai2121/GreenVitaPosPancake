@@ -70,9 +70,11 @@ python thuong_thang.py 2026-08    # tháng đã qua: CHỐT SỔ ngay (tính l�
 ```
 
 MỘT lệnh lấy dữ liệu MỘT lần rồi cập nhật cả 3 tab:
-1. **Thưởng Sale GR T08.2026** - thưởng ngày bộ phận Sale
-2. **Thưởng CSKH GR T08.2026** - thưởng ngày bộ phận CSKH
-3. **BC02 Thưởng DS Sale- CSKH T08.2026** - thưởng doanh số tháng (giữ cột nhập tay)
+1. **Thưởng Sale GR T09.2026** - thưởng ngày bộ phận Sale
+2. **Thưởng CSKH GR T09.2026** - thưởng ngày bộ phận CSKH
+3. **Doanh số NV T09.2026** - ma trận DOANH SỐ ngày từng nhân viên (cùng cấu trúc
+   bảng thưởng, để đối chiếu: doanh số ô nào -> thưởng ô đó theo mốc)
+4. **BC02 Thưởng DS Sale- CSKH T09.2026** - thưởng doanh số tháng (giữ cột % nhập tay)
 
 Logic "chốt ngày, chốt sổ":
 - **Trễ 2 ngày**: hôm nay 29 thì bảng chỉ hiển thị đến 27 (2 ngày cuối trạng thái đơn
@@ -90,8 +92,9 @@ Logic "chốt ngày, chốt sổ":
 - Thưởng ngày tính từ **doanh số ngày** của từng nhân viên, theo mốc riêng từng nhóm
   trong `BONUS_TIERS_BY_GROUP` (`config.py`):
   - **Sale** ngày thường: ≥ 5tr→50k, 10tr→100k, 14tr→150k, 18tr→200k, 22tr→300k, 25tr→400k
+  - **Sale** Chủ nhật: ≥ 5tr→150k, 10tr→200k, 14tr→250k, 18tr→300k, 22tr→400k, 25tr→500k
   - **CSKH** ngày thường: ≥ 5tr→50k, 10tr→100k, 14tr→150k, 18tr→200k, 22tr→250k
-  - **Chủ nhật** (cả 2 nhóm): ≥ 5tr→150k, 10tr→200k, 14tr→250k, 18tr→300k, 22tr→350k
+  - **CSKH** Chủ nhật: ≥ 5tr→150k, 10tr→200k, 14tr→250k, 18tr→300k, 22tr→350k
 - Google Sheet: xác thực bằng `service_account.json` (sheet phải chia sẻ Editor cho
   `client_email` trong file đó); ID sheet đặt ở `GOOGLE_SHEET_ID` trong `.env`.
   Google không cấp dung lượng Drive cho service account nên khi cần sheet mới, tự tạo

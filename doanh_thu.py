@@ -68,6 +68,19 @@ def load_staff(client: PancakeClient, shop_id: str) -> dict[str, dict]:
     return staff
 
 
+def roster_sort_key(item: tuple[str, dict]) -> tuple:
+    """Khóa sắp xếp nhân viên: nhóm theo bộ phận, bộ phận có chữ 'nghỉ' xuống CUỐI,
+    trong mỗi bộ phận xếp theo tên.
+
+    Khi so sánh bỏ qua tiền tố 'NV ' để các bộ phận cùng đội đứng cạnh nhau
+    (vd 'NV CSKH NT' xếp ngay cạnh 'CSKH NT')."""
+    _uid, info = item
+    dept = info["dept"]
+    nghi = 1 if "nghỉ" in dept.lower() else 0
+    dept_key = dept[3:] if dept.startswith("NV ") else dept
+    return (nghi, dept_key, dept, info["name"])
+
+
 def matched_departments(staff: dict[str, dict], keyword: str) -> set[str]:
     """Các bộ phận có tên chứa keyword (không phân biệt hoa/thường)."""
     kw = keyword.lower()

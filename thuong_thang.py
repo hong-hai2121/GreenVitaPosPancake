@@ -12,10 +12,11 @@ Nguyên tắc:
        rồi nối thêm cột; số của các ngày cũ giữ nguyên như trên sheet.
     3. CHỐT SỔ CUỐI THÁNG: sang tháng mới (từ mùng 2), script tự gọi lại API MỘT LẦN
        trọn tháng trước để sửa thưởng lần cuối (bắt đơn hoàn/hủy muộn), đóng dấu
-       "ĐÃ CHỐT SỔ" lên tiêu đề cả 3 tab - từ đó không lần chạy nào sửa được nữa.
+       "ĐÃ CHỐT SỔ" lên tiêu đề các tab - từ đó không lần chạy nào sửa được nữa.
 
-3 tab: "Thưởng Sale GR", "Thưởng CSKH GR" (ma trận thưởng ngày) và
-"BC02 Thưởng DS Sale- CSKH" (thưởng doanh số tháng, 2 cột nhập tay được giữ nguyên).
+4 tab: "Thưởng Sale GR", "Thưởng CSKH GR" (ma trận thưởng ngày),
+"Doanh số NV" (ma trận doanh số ngày - đối chiếu với thưởng) và
+"BC02 Thưởng DS Sale- CSKH" (thưởng doanh số tháng, cột % nhập tay được giữ nguyên).
 """
 import argparse
 import calendar
@@ -29,7 +30,7 @@ from bc02_thuong_ds import build_table as bc02_build_table
 from bc02_thuong_ds import dem_hoan_thang_truoc
 from bc02_thuong_ds import parse_old_manual as bc02_parse_old_manual
 from bc02_thuong_ds import read_gr_bonus_totals
-from doanh_thu import load_staff, matched_departments, seller_of, vnd
+from doanh_thu import load_staff, matched_departments, roster_sort_key, seller_of, vnd
 from pancake_client import PancakeClient, PancakeError
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -98,7 +99,10 @@ def fetch_range_data(
         else:
             cell["hoan"] += 1
 
-    luu_tru.luu_don_theo_ngay(orders_by_day)
+    # CHỈ lưu các ngày trong khoảng yêu cầu: API có thể trả kèm vài đơn "rìa" của
+    # ngày lân cận - nếu lưu cả sẽ GHI ĐÈ file ngày đó chỉ với mấy đơn rìa (mất dữ liệu)
+    luu_tru.luu_don_theo_ngay({d: lst for d, lst in orders_by_day.items()
+                               if start_day <= d <= end_day})
     luu_tru.don_dep()
     return data
 
@@ -212,11 +216,68 @@ def build_matrix(
     return values
 
 
+def build_ds_matrix(
+    month_label: str, days: list[date], roster: list[tuple[str, dict]],
+    data: dict, settled_days: set[date], old_values: dict, title_suffix: str = "",
+) -> list[list]:
+    """Ma trận DOANH SỐ ngày theo nhân viên (căn cứ tính thưởng) - để đối chiếu."""
+    n_day_cols = len(days)
+    first_day_col = 4
+    header = ["STT", "Họ và tên", "Bộ phận"] + [d.strftime("%d/%m/%Y") for d in days] + ["Tổng tháng"]
+    values: list[list] = [
+        [f"Doanh số ngày theo nhân viên Tháng {month_label} (căn cứ tính thưởng GR){title_suffix}"],
+        header,
+    ]
+    for idx, (uid, info) in enumerate(roster, start=1):
+        row_num = len(values) + 1
+        cells = []
+        for d in days:
+            if d in settled_days:
+                cells.append(old_values.get((info["name"], d), ""))
+            else:
+                ds = data.get(uid, {}).get(d, {}).get("ds_all", 0)
+                cells.append(ds if ds else "")
+        first_cell = f"{google_sheet._col_letter(first_day_col)}{row_num}"
+        last_cell = f"{google_sheet._col_letter(first_day_col + n_day_cols - 1)}{row_num}"
+        values.append([idx, info["name"], info["dept"]] + cells + [f"=SUM({first_cell}:{last_cell})"])
+
+    first_data_row, last_data_row = 3, len(values)
+    total_row: list = ["", "Tổng", ""]
+    for i in range(n_day_cols + 1):
+        col = google_sheet._col_letter(first_day_col + i)
+        total_row.append(f"=SUM({col}{first_data_row}:{col}{last_data_row})")
+    values.append(total_row)
+    return values
+
+
+def build_rules_block() -> list[list]:
+    """Bảng quy tắc thưởng (Sale + CSKH, ngày thường + Chủ nhật) - tự sinh từ config."""
+    tiers = config.BONUS_TIERS_BY_GROUP
+    thresholds = sorted({nguong for g in tiers.values()
+                         for arr in g.values() for nguong, _ in arr})
+
+    def muc(group: str, kind: str, nguong: int):
+        for n, thuong in tiers[group][kind]:
+            if n == nguong:
+                return thuong
+        return ""
+
+    rows: list[list] = [
+        ["QUY TẮC TÍNH THƯỞNG THEO DOANH SỐ NGÀY (đạt mốc >= nào cao nhất thì hưởng mốc đó)"],
+        ["Doanh số ngày từ", "Sale - Ngày thường", "Sale - Chủ nhật",
+         "CSKH - Ngày thường", "CSKH - Chủ nhật"],
+    ]
+    for t in thresholds:
+        rows.append([t, muc("sale", "weekday", t), muc("sale", "sunday", t),
+                     muc("cskh", "weekday", t), muc("cskh", "sunday", t)])
+    return rows
+
+
 def group_roster(staff: dict, keyword: str) -> list[tuple[str, dict]]:
     dept_filter = matched_departments(staff, keyword)
     return sorted(
         ((uid, info) for uid, info in staff.items() if info["dept"] in dept_filter),
-        key=lambda x: (x[1]["dept"], x[1]["name"]),
+        key=roster_sort_key,
     )
 
 
@@ -229,8 +290,10 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
 
     tabs = {kw: f"Thưởng {label} GR T{month:02d}.{year}" for kw, label in GROUPS}
     bc02_tab = f"BC02 Thưởng DS Sale- CSKH T{month:02d}.{year}"
+    ds_tab = f"Doanh số NV T{month:02d}.{year}"
     old = {kw: google_sheet.read_table(t) for kw, t in tabs.items()}
     old_bc02 = google_sheet.read_table(bc02_tab)
+    old_ds = google_sheet.read_table(ds_tab)
 
     if is_locked(old["sale"]) or is_locked(old_bc02):
         print(f"Tháng {month:02d}.{year} {LOCK_MARK} - giữ nguyên, không sửa.")
@@ -249,7 +312,12 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
             print(f"Tháng {month:02d}.{year}: chưa có ngày nào đủ {SETTLE_DELAY_DAYS} ngày chờ chốt.")
             return
         cutoff = min(cutoff, month_end)
-        settled_days = {d for d in parse_header_days(old["sale"]) if d <= cutoff}
+        # Ngày "đã chốt" = ngày đã có cột trên CẢ tab thưởng lẫn tab doanh số
+        # (tab nào thiếu ngày thì ngày đó được lấy lại dữ liệu để bổ sung)
+        settled_days = {
+            d for d in parse_header_days(old["sale"]) & parse_header_days(old_ds)
+            if d <= cutoff
+        }
         # Nếu tab cũ có cột ngày vượt cutoff (dữ liệu của logic cũ) -> làm lại từ đầu
         if any(d > cutoff for d in parse_header_days(old["sale"])):
             settled_days = set()
@@ -283,12 +351,26 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
         total = sum(sum(v for v in row[3:-1] if isinstance(v, int)) for row in values[2:-1])
         print(f"  [OK] {tabs[keyword]}: {len(roster)} NV, tổng thưởng {vnd(total)}")
 
-    # --- BC02: cộng dồn ngày mới vào số cũ (chốt sổ thì tính lại từ data cả tháng) ---
+    # --- Tab DOANH SỐ NV: cùng cấu trúc bảng thưởng, ô = doanh số ngày (đối chiếu) ---
     roster_all = sorted(
         ((uid, info) for uid, info in staff.items()
          if any(kw in info["dept"].lower() for kw, _ in GROUPS)),
-        key=lambda x: (x[1]["dept"], x[1]["name"]),
+        key=roster_sort_key,
     )
+    ds_values = build_ds_matrix(month_label, days, roster_all, data,
+                                settled_days, parse_old_bonus(old_ds), title_suffix)
+    end_col = google_sheet._col_letter(3 + len(days) + 1)
+    sunday_cols = [3 + i for i, d in enumerate(days) if d.weekday() == 6]
+    google_sheet.write_table(ds_tab, ds_values,
+                             money_range=f"D3:{end_col}{len(ds_values)}",
+                             sunday_cols=sunday_cols,
+                             rules_block=build_rules_block())
+    tong_ds_ngay = sum(
+        sum(v for v in row[3:-1] if isinstance(v, int)) for row in ds_values[2:-1]
+    )
+    print(f"  [OK] {ds_tab}: {len(roster_all)} NV, tổng doanh số {vnd(tong_ds_ngay)}")
+
+    # --- BC02: cộng dồn ngày mới vào số cũ (chốt sổ thì tính lại từ data cả tháng) ---
     old_stats = {} if (finalize or not settled_days) else parse_old_bc02_stats(old_bc02)
     stats: dict[str, dict] = {}
     for uid, info in roster_all:
@@ -317,7 +399,7 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
     print(f"  [OK] {bc02_tab}: {tong_chot} đơn chốt, {tong_hoan} hoàn tháng này, "
           f"{tong_ht} hoàn tháng trước, DS {vnd(tong_ds)}")
     if finalize:
-        print(f"  Đã đóng dấu '{LOCK_MARK}' - 3 tab tháng {month:02d}.{year} bị khóa vĩnh viễn.")
+        print(f"  Đã đóng dấu '{LOCK_MARK}' - các tab tháng {month:02d}.{year} bị khóa vĩnh viễn.")
 
 
 def parse_args() -> tuple[int, int, bool]:

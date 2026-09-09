@@ -16,7 +16,7 @@ Cấu trúc tab (mỗi tháng 1 tab):
 
 Nguồn số liệu:
     - Đơn chốt / Đơn hoàn / DS bán hàng: tính từ đơn hàng của tháng trên Pancake
-      (DS bán hàng = tổng tiền các ĐƠN CHỐT)
+      (DS bán hàng = DOANH SỐ = tổng tiền đơn chốt + đơn hoàn)
     - Tỷ lệ hoàn = Đơn hoàn / (Đơn chốt + Đơn hoàn)  (công thức trên sheet)
     - Thưởng, % Thưởng: NHẬP TAY trên sheet (ô nền vàng) - chạy lại script vẫn
       GIỮ NGUYÊN số đã nhập; Thực nhận = Thưởng x % Thưởng (công thức, % trống = 100%)
@@ -92,7 +92,9 @@ def dem_hoan_thang_truoc(client: PancakeClient, shop_id: str,
 def fetch_month_stats(
     client: PancakeClient, shop_id: str, first: date, last: date, tz: ZoneInfo
 ) -> dict[str, dict]:
-    """Theo nhân viên: số đơn chốt, số đơn hoàn, DS bán hàng (tổng tiền đơn chốt)."""
+    """Theo nhân viên: số đơn chốt, số đơn hoàn, DS bán hàng.
+
+    DS bán hàng = DOANH SỐ = tổng tiền đơn chốt + đơn hoàn (Đang hoàn/Đã hoàn)."""
     start_ts = int(datetime.combine(first, time.min, tzinfo=tz).timestamp())
     end_ts = int(datetime.combine(last, time.max, tzinfo=tz).timestamp())
     stats: dict[str, dict] = {}
@@ -107,6 +109,7 @@ def fetch_month_stats(
             s["ds"] += o.get("total_price") or 0
         elif status in config.RETURN_STATUSES:
             s["hoan"] += 1
+            s["ds"] += o.get("total_price") or 0
     return stats
 
 

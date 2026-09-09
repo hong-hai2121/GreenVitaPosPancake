@@ -17,7 +17,7 @@ from google.oauth2.service_account import Credentials
 
 import config
 
-SPREADSHEET_NAME = "Doanh Thu GreenVita POS"
+SPREADSHEET_NAME = "Doanh Số Sale GreenVita POS"
 
 # Google thỉnh thoảng trả 429/5xx tạm thời (họ khuyên "try again in 30 seconds")
 _RETRY_STATUS = {429, 500, 502, 503}
@@ -138,10 +138,8 @@ def _tab_rank(t: str) -> int:
     """Thứ tự tab trong cùng 1 tháng: Thưởng -> Doanh số NV -> Doanh số Page -> BC02."""
     if t.startswith("thưởng"):
         return 0
-    if t.startswith("doanh số page"):
-        return 2
     if t.startswith("doanh số"):
-        return 1
+        return 2 if " page" in t else 1
     if t.startswith("bc02"):
         return 3
     return 4

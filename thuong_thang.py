@@ -8,11 +8,17 @@ Chạy:
 Nguyên tắc:
     1. TRỄ 2 NGÀY: hôm nay 29 thì bảng chỉ hiển thị đến ngày 27 - hai ngày cuối
        trạng thái đơn còn thay đổi nhiều nên chưa đưa vào.
-    2. NGÀY ĐÃ LÊN BẢNG = ĐÃ CHỐT: mỗi lần chạy chỉ gọi API lấy đơn của các NGÀY MỚI
-       rồi nối thêm cột; số của các ngày cũ giữ nguyên như trên sheet.
-    3. CHỐT SỔ CUỐI THÁNG: sang tháng mới (từ mùng 2), script tự gọi lại API MỘT LẦN
+    2. MỖI LẦN CHẠY GỌI API 7 NGÀY GẦN NHẤT (đến hôm nay - 2) và GHI ĐÈ kho
+       api_data - kho luôn tươi trong cửa sổ 7 ngày.
+    3. NGÀY ĐÃ LÊN BẢNG = ĐÃ CHỐT (bảng Thưởng GR / Doanh số NV / BC02): chỉ NỐI
+       THÊM cột của ngày mới (hôm nay - 2); số các ngày cũ giữ nguyên như trên
+       sheet, KỂ CẢ khi kho api_data quá khứ đã được ghi đè mới hơn.
+    4. Tab DOANH SỐ PAGE: luôn DỰNG LẠI từ kho api_data -> 7 ngày gần nhất của nó
+       phản ánh trạng thái đơn mới nhất.
+    5. CHỐT SỔ CUỐI THÁNG: sang tháng mới (từ mùng 2), script tự gọi lại API MỘT LẦN
        trọn tháng trước để sửa thưởng lần cuối (bắt đơn hoàn/hủy muộn), đóng dấu
-       "ĐÃ CHỐT SỔ" lên tiêu đề các tab - từ đó không lần chạy nào sửa được nữa.
+       "ĐÃ CHỐT SỔ" lên tiêu đề các tab - từ đó không đụng đến tháng đó nữa
+       (kể cả kho api_data của tháng đó).
 
 HAI TRANG TÍNH riêng, mỗi bộ phận 1 file, KHÔNG lẫn thông tin của nhau
 (.env: GOOGLE_SHEET_ID = Sale, GOOGLE_SHEET_ID_CSKH = CSKH):
@@ -45,6 +51,7 @@ if hasattr(sys.stdout, "reconfigure"):
 GROUPS = [("sale", "Sale"), ("cskh", "CSKH")]
 LOCK_MARK = "ĐÃ CHỐT SỔ"
 SETTLE_DELAY_DAYS = 2      # số ngày trễ trước khi một ngày được đưa vào bảng
+FETCH_WINDOW_DAYS = 7      # mỗi lần chạy gọi API ghi đè kho bấy nhiêu ngày gần nhất
 
 
 def bonus_for(doanh_so: int, day: date, tiers_cfg: dict) -> int:
@@ -239,17 +246,20 @@ def build_matrix(
         row_num = len(values) + 1
         cells = []
         for d in days:
-            if d in settled_days:
-                cells.append(old_bonus.get((info["name"], d), ""))
-            elif (d.weekday() == 6 and dang_ky_cn is not None
+            # Ngày đã chốt: lấy số cũ trên sheet; KHÔNG THẤY số cũ (NV đổi tên trên
+            # Pancake, dòng mới...) thì tính lại từ data thay vì bỏ trắng
+            cu = old_bonus.get((info["name"], d)) if d in settled_days else None
+            if cu is not None:
+                cells.append(cu)
+                continue
+            ds_all = data.get(uid, {}).get(d, {}).get("ds_all", 0)
+            b = bonus_for(ds_all, d, tiers_cfg)
+            if (d.weekday() == 6 and dang_ky_cn is not None
                     and (uid, d) not in dang_ky_cn):
                 # CN không đăng ký làm trên Lịch trực: lẽ ra có thưởng -> ghi 0 rõ ràng,
                 # không đạt mốc nào -> để rỗng như bình thường
-                ds_all = data.get(uid, {}).get(d, {}).get("ds_all", 0)
-                cells.append(0 if bonus_for(ds_all, d, tiers_cfg) else "")
+                cells.append(0 if b else "")
             else:
-                ds_all = data.get(uid, {}).get(d, {}).get("ds_all", 0)
-                b = bonus_for(ds_all, d, tiers_cfg)
                 cells.append(b if b else "")
         first_cell = f"{google_sheet._col_letter(first_day_col)}{row_num}"
         last_cell = f"{google_sheet._col_letter(first_day_col + n_day_cols - 1)}{row_num}"
@@ -281,8 +291,10 @@ def build_ds_matrix(
         row_num = len(values) + 1
         cells = []
         for d in days:
-            if d in settled_days:
-                cells.append(old_values.get((info["name"], d), ""))
+            # Ngày đã chốt lấy số cũ; không thấy số cũ thì tính lại từ data (xem build_matrix)
+            cu = old_values.get((info["name"], d)) if d in settled_days else None
+            if cu is not None:
+                cells.append(cu)
             else:
                 ds = data.get(uid, {}).get(d, {}).get("ds_all", 0)
                 cells.append(ds if ds else "")
@@ -301,59 +313,32 @@ def build_ds_matrix(
 
 def build_page_matrix(month_label: str, days: list[date], staff: dict[str, dict],
                       keyword: str, group_label: str, title_suffix: str = "") -> list[list]:
-    """Ma trận DOANH THU ngày theo PAGE NGUỒN - tính GIỐNG báo cáo Revenue trên POS:
+    """Ma trận DOANH SỐ ngày theo PAGE NGUỒN:
+      - DOANH SỐ = tổng tiền ĐƠN CHỐT + ĐƠN HOÀN (Đang hoàn/Đã hoàn)
       - gộp theo NGUỒN ĐƠN HÀNG (`account` = page quảng cáo dẫn đơn về),
         không phải page hội thoại nơi tạo đơn
-      - chỉ tính ĐƠN CHỐT (không gồm đơn hoàn)
-      - tính vào NGÀY XÁC NHẬN đơn (đơn chưa từng "Đã xác nhận" -> ngày tạo);
-        vì vậy quét thêm đơn tạo từ tháng trước để bắt đơn xác nhận trễ
+      - tính theo NGÀY TẠO đơn (cùng mốc với ma trận Doanh số nhân viên,
+        nên tổng ngày của 2 bảng đối chiếu được với nhau)
     CHỈ tính đơn do nhân viên bộ phận chứa `keyword` phụ trách.
 
     Dựng lại toàn bộ từ đơn thô đã lưu trong api_data/ (không gọi thêm API);
-    các page xếp theo tổng doanh thu tháng giảm dần."""
+    các page xếp theo tổng doanh số tháng giảm dần."""
     import luu_tru
 
-    def ngay_xac_nhan(o: dict) -> date | None:
-        """Ngày ĐẦU TIÊN đơn chuyển 'Đã xác nhận'; không có thì lấy ngày tạo."""
-        t = None
-        for h in (o.get("status_history") or []):
-            if h.get("status") == 1 and h.get("updated_at"):
-                if t is None or h["updated_at"] < t:
-                    t = h["updated_at"]
-        for moc in (t, o.get("inserted_at")):
-            if moc:
-                try:
-                    return datetime.fromisoformat(moc).date()
-                except ValueError:
-                    continue
-        return None
-
-    # Quét từ đầu THÁNG TRƯỚC: đơn tạo tháng trước nhưng xác nhận trong tháng này
-    prev_first = (days[0].replace(day=1) - timedelta(days=1)).replace(day=1)
-    scan_days = [prev_first + timedelta(days=i)
-                 for i in range((days[-1] - prev_first).days + 1)]
-    hien_thi = set(days)
-
     dept_kw = keyword.lower()
-    ds: dict[str, dict[date, int]] = {}      # nguồn -> {ngày xác nhận: doanh thu}
+    ds: dict[str, dict[date, int]] = {}      # nguồn -> {ngày tạo: doanh số}
     names: dict[str, str] = {}
     plats: dict[str, str] = {}
-    seen: set = set()
-    for _day, orders in luu_tru.doc_don_theo_ngay(scan_days).items():
+    for day, orders in luu_tru.doc_don_theo_ngay(days).items():
         for o in orders:
-            oid = o.get("id")
-            if oid in seen:
-                continue
-            seen.add(oid)
-            if o.get("status") not in config.CLOSED_STATUSES:
-                continue                     # giống POS: chỉ đơn chốt, bỏ đơn hoàn
+            status = o.get("status")
+            if (status not in config.CLOSED_STATUSES
+                    and status not in config.RETURN_STATUSES):
+                continue                     # doanh số = đơn chốt + đơn hoàn
             uid, _ = seller_of(o)
             info = staff.get(uid)
             if not info or dept_kw not in info["dept"].lower():
                 continue                     # đơn của bộ phận khác -> không tính
-            day = ngay_xac_nhan(o)
-            if day not in hien_thi:
-                continue
             acc = str(o.get("account") or "")
             name = clean_name(o.get("account_name") or "") or "(Không có nguồn)"
             key = acc or name
@@ -379,8 +364,8 @@ def build_page_matrix(month_label: str, days: list[date], staff: dict[str, dict]
     first_day_col = 4
     header = ["STT", "Page nguồn", "Nền tảng"] + [d.strftime("%d/%m/%Y") for d in days] + ["Tổng tháng"]
     values: list[list] = [
-        [f"Doanh thu ngày theo PAGE NGUỒN - Bộ phận {group_label} Tháng {month_label} "
-         f"(giống Revenue POS: chỉ đơn chốt, gộp theo nguồn đơn, tính vào ngày xác nhận)"
+        [f"Doanh số ngày theo PAGE NGUỒN - Bộ phận {group_label} Tháng {month_label} "
+         f"(doanh số = đơn chốt + đơn hoàn; gộp theo nguồn đơn, tính theo ngày tạo đơn)"
          f"{title_suffix}"],
         header,
     ]
@@ -451,7 +436,8 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
     tabs = {kw: f"Thưởng {label} GR T{month:02d}.{year}" for kw, label in GROUPS}
     bc02_tabs = {kw: f"BC02 Thưởng DS {label} T{month:02d}.{year}" for kw, label in GROUPS}
     ds_tabs = {kw: f"Doanh số {label} T{month:02d}.{year}" for kw, label in GROUPS}
-    page_tab = f"Doanh số Page T{month:02d}.{year}"   # mỗi trang tính 1 tab, lọc theo bộ phận
+    # Tab doanh số theo page: mỗi trang tính 1 tab, lọc theo bộ phận tương ứng
+    page_tabs = {kw: f"Doanh số {label} Page T{month:02d}.{year}" for kw, label in GROUPS}
     # Tab gộp Sale+CSKH của bản cũ (đều nằm ở trang tính Sale)
     bc02_tab_gop_cu = f"BC02 Thưởng DS Sale- CSKH T{month:02d}.{year}"
     ds_tab_gop_cu = f"Doanh số NV T{month:02d}.{year}"
@@ -474,12 +460,6 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
     old_ds_gop = google_sheet.read_table(ds_tab_gop_cu)
     old_ds_raw = {kw: google_sheet.read_table(t, nhom=kw) for kw, t in ds_tabs.items()}
     old_ds = {kw: v if v else old_ds_gop for kw, v in old_ds_raw.items()}
-    # Còn việc chuyển/tách tab hoặc chưa có tab page -> vẫn chạy dù không có ngày mới
-    can_tach_tab = tab_cskh_o_sheet_cu or (
-        old_ds_gop is not None and any(not v for v in old_ds_raw.values())) or (
-        old_bc02_gop is not None and any(not v for v in old_bc02_raw.values())) or any(
-        google_sheet.read_table(page_tab, nhom=kw) is None for kw, _ in GROUPS)
-
     if is_locked(old["sale"]) or is_locked(old_bc02["sale"]):
         print(f"Tháng {month:02d}.{year} {LOCK_MARK} - giữ nguyên, không sửa.")
         return
@@ -511,18 +491,22 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
     days = [first + timedelta(days=i) for i in range((cutoff - first).days + 1)]
     new_days = [d for d in days if d not in settled_days]
 
-    if not new_days:
-        if not can_tach_tab:
-            print(f"Tháng {month:02d}.{year}: đã chốt đến {cutoff.strftime('%d/%m')} - không có ngày mới.")
-            return
-        # Không có ngày mới nhưng chưa tách xong 2 trang tính -> chuyển từ số đã chốt, khỏi gọi API
-        print(f"Tháng {month:02d}.{year}: không có ngày mới - "
-              f"chuyển dữ liệu CSKH sang trang tính riêng từ số đã chốt.")
-        data: dict = {}
+    if finalize:
+        data = fetch_range_data(client, shop_id, first, cutoff, tz)
     else:
+        # LUÔN gọi API 7 NGÀY GẦN NHẤT (giới hạn trong tháng) ghi đè kho api_data:
+        # - bảng Thưởng/Doanh số NV/BC02 chỉ NỐI CỘT ngày mới, số cũ giữ nguyên
+        # - tab Doanh số Page dựng lại từ kho -> luôn theo trạng thái đơn mới nhất
+        fetch_start = max(first, cutoff - timedelta(days=FETCH_WINDOW_DAYS - 1))
+        if new_days:
+            fetch_start = min(fetch_start, new_days[0])   # chạy bù ngày cũ chưa lên bảng
+        thong_bao_moi = (", ngày mới lên bảng: "
+                         + ", ".join(d.strftime("%d/%m") for d in new_days)
+                         if new_days else ", không có ngày mới lên bảng")
         print(f"Tháng {month:02d}.{year}: hiển thị đến {cutoff.strftime('%d/%m')}, "
-              f"lấy đơn {new_days[0].strftime('%d/%m')} - {new_days[-1].strftime('%d/%m')} ...")
-        data = fetch_range_data(client, shop_id, new_days[0], cutoff, tz)
+              f"lấy API {fetch_start.strftime('%d/%m')} - {cutoff.strftime('%d/%m')} "
+              f"ghi đè kho{thong_bao_moi} ...")
+        data = fetch_range_data(client, shop_id, fetch_start, cutoff, tz)
 
     # --- 2 bảng ma trận thưởng ngày (mỗi nhóm ghi vào trang tính riêng) ---
     # Lịch trực Chủ nhật: đọc 1 lần; LỖI -> bỏ qua quy tắc, KHÔNG chặn cập nhật
@@ -596,10 +580,10 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
     #     nhân viên bộ phận đó): dựng lại từ đơn thô đã lưu ---
     for keyword, label in GROUPS:
         page_values = build_page_matrix(month_label, days, staff, keyword, label, title_suffix)
-        google_sheet.write_table(page_tab, page_values,
+        google_sheet.write_table(page_tabs[keyword], page_values,
                                  money_range=f"D3:{end_col}{len(page_values)}",
                                  sunday_cols=sunday_cols, nhom=keyword)
-        print(f"  [OK] {page_tab} ({label}): {len(page_values) - 3} page")
+        print(f"  [OK] {page_tabs[keyword]}: {len(page_values) - 3} page")
 
     # --- Dọn trang tính Sale (cũ) sau khi đã chuyển/tách xong ---
     if tab_cskh_o_sheet_cu and "cskh" in da_ghi and google_sheet.delete_tab(tabs["cskh"]):
@@ -631,7 +615,7 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
                 if cell:
                     s["chot"] += cell["chot"]
                     s["hoan"] += cell["hoan"]
-                    s["ds"] += cell["ds_chot"]
+                    s["ds"] += cell["ds_all"]   # DS bán hàng = DOANH SỐ (chốt + hoàn)
             stats[uid] = s
         values = bc02_build_table(month, year, roster, stats,
                                   bc02_parse_old_manual(old_bc02[keyword]), title_suffix,

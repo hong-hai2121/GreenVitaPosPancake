@@ -17,8 +17,8 @@ TIMEZONE = "Asia/Ho_Chi_Minh"
 # Số đơn tối đa mỗi call API (server Pancake giới hạn cứng <= 1000)
 ORDERS_PAGE_SIZE = 1000
 
-# Giữ dữ liệu thô trong api_data/ của bao nhiêu tháng gần nhất
-API_DATA_THANG_GIU = 2
+# Giữ dữ liệu thô trong api_data/ của bao nhiêu tháng gần nhất (24 = 2 năm)
+API_DATA_THANG_GIU = 24
 
 # ---- Google Sheets (tùy chọn, dùng với cờ --gsheet) ----
 # File service account (đã copy từ dự án ADS_facebook)

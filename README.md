@@ -76,11 +76,12 @@ Trang tính **Sale** (không có thông tin CSKH):
 1. **Thưởng Sale GR T09.2026** - thưởng ngày bộ phận Sale
 2. **Doanh số Sale T09.2026** - ma trận DOANH SỐ ngày nhân viên Sale (cùng cấu trúc
    bảng thưởng, để đối chiếu: doanh số ô nào -> thưởng ô đó theo mốc)
-3. **Doanh số Page T09.2026** - ma trận DOANH THU ngày theo PAGE NGUỒN, tính GIỐNG
-   báo cáo Revenue trên POS: gộp theo nguồn đơn hàng (page quảng cáo dẫn đơn về,
-   trường `account`), CHỈ đơn chốt (không gồm hoàn), tính vào NGÀY XÁC NHẬN đơn;
-   chỉ tính đơn do nhân viên bộ phận Sale phụ trách (dựng từ đơn thô `api_data/`,
-   xếp theo tổng tháng giảm dần; trang tính CSKH có tab cùng tên lọc theo CSKH)
+3. **Doanh số Sale Page T09.2026** - ma trận DOANH SỐ ngày theo PAGE NGUỒN:
+   gộp theo nguồn đơn hàng (page quảng cáo dẫn đơn về, trường `account`),
+   doanh số = đơn chốt + đơn hoàn, tính theo NGÀY TẠO đơn (cùng mốc với ma trận
+   nhân viên); chỉ tính đơn do nhân viên bộ phận Sale phụ trách (dựng từ đơn thô
+   `api_data/`, xếp theo tổng tháng giảm dần; trang tính CSKH có tab
+   "Doanh số CSKH Page ..." lọc theo CSKH)
 4. **BC02 Thưởng DS Sale T09.2026** - thưởng doanh số tháng bộ phận Sale
    (giữ cột % nhập tay)
 
@@ -98,12 +99,18 @@ Trang tính CSKH phải chia sẻ quyền Editor cho email service account
 Logic "chốt ngày, chốt sổ":
 - **Trễ 2 ngày**: hôm nay 29 thì bảng chỉ hiển thị đến 27 (2 ngày cuối trạng thái đơn
   còn thay đổi nên chưa đưa vào)
-- **Ngày đã lên bảng = đã chốt**: chạy hàng ngày chỉ gọi API lấy đơn của NGÀY MỚI
-  (thường 1 call) rồi nối cột; số các ngày cũ giữ nguyên. Không có ngày mới thì
-  không gọi API đơn hàng (~5 giây)
+- **Mỗi lần chạy gọi API 7 NGÀY GẦN NHẤT** (đến hôm nay − 2, giới hạn trong tháng)
+  và GHI ĐÈ kho `api_data/` - kho luôn tươi trong cửa sổ 7 ngày
+- **Ngày đã lên bảng = đã chốt** (tab Thưởng GR / Doanh số NV / BC02): chỉ NỐI CỘT
+  của ngày mới; số các ngày cũ giữ nguyên trên sheet, kể cả khi kho api_data
+  quá khứ đã được ghi đè mới hơn
+- **Tab Doanh số Page luôn dựng lại từ kho** - 7 ngày gần nhất của nó phản ánh
+  trạng thái đơn mới nhất (có thể lệch nhẹ với ma trận NV ở 7 ngày cuối, vì ma
+  trận NV đã chốt còn Page thì cập nhật tiếp)
 - **Chốt sổ cuối tháng**: từ mùng 2 tháng sau, chạy mặc định sẽ tự gọi lại API một lần
   trọn tháng trước để sửa thưởng lần cuối (bắt đơn hoàn/hủy muộn), đóng dấu
-  **"ĐÃ CHỐT SỔ"** lên tiêu đề các tab - từ đó tab bị khóa, mọi lần chạy sau bỏ qua
+  **"ĐÃ CHỐT SỔ"** lên tiêu đề các tab - từ đó tab bị khóa, mọi lần chạy sau bỏ qua,
+  kho api_data của tháng đó cũng không bị ghi đè nữa
 
 - Ghi vào tab `Thưởng GR T<tháng>.<năm>` trong cùng Google Sheet
 - Cấu trúc: STT | Họ và tên | Bộ phận | từng ngày trong tháng | Tổng tháng; dòng cuối

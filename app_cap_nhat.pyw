@@ -3,7 +3,7 @@
 
 - Nháy đúp file này -> mở cửa sổ: tự chạy cập nhật ngay, hiển thị tiến trình,
   rồi ĐẾM NGƯỢC tới 9h sáng hôm sau và tự chạy tiếp.
-- Nút bấm: Cập nhật ngay / Mở Google Sheet / Mở file log.
+- Nút bấm: Cập nhật ngay / Sheet Sale / Sheet CSKH / Mở file log.
 - Chế độ chạy ngầm cho Task Scheduler:  pythonw app_cap_nhat.pyw --ngam
   (chạy 1 lần, ghi log rồi thoát - không mở cửa sổ).
 
@@ -12,6 +12,7 @@ Mọi lần chạy đều ghi thêm vào logs/cap_nhat.log.
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -23,7 +24,35 @@ BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
 LOG_FILE = LOG_DIR / "cap_nhat.log"
 CAI_DAT_FILE = BASE_DIR / "cai_dat_app.json"
+ENV_FILE = BASE_DIR / ".env"
 GIO_CHAY_MAC_DINH = (9, 0)       # giờ:phút tự chạy hằng ngày (mặc định 9h sáng)
+
+
+def doc_env(key: str) -> str:
+    """Đọc 1 biến từ file .env (không cần load_dotenv)."""
+    try:
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith(key + "="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def luu_env(key: str, value: str) -> None:
+    """Ghi/cập nhật 1 biến trong file .env."""
+    text = ENV_FILE.read_text(encoding="utf-8") if ENV_FILE.exists() else ""
+    if re.search(rf"^{key}=.*$", text, flags=re.M):
+        text = re.sub(rf"^{key}=.*$", f"{key}={value}", text, flags=re.M)
+    else:
+        text += f"\n{key}={value}\n"
+    ENV_FILE.write_text(text, encoding="utf-8")
+
+
+def rut_id_sheet(s: str) -> str:
+    """Nhận cả link đầy đủ lẫn ID trần: trả về ID trang tính."""
+    m = re.search(r"/d/([A-Za-z0-9_-]{20,})", s or "")
+    return m.group(1) if m else (s or "").strip()
 
 
 def doc_gio_chay() -> tuple[int, int]:
@@ -135,6 +164,18 @@ def chay_giao_dien() -> None:
                        font=("Segoe UI", 11), textvariable=self.bien_phut, wrap=True,
                        command=self.doi_gio, justify="center").grid(row=0, column=3)
 
+            # --- Link lịch trực Chủ nhật (sửa được, lưu vào .env) ---
+            khung_lt = tk.Frame(root, bg=XANH_NHAT)
+            khung_lt.pack(pady=(2, 2))
+            tk.Label(khung_lt, text="Link lịch trực CN:", font=("Segoe UI", 10),
+                     fg=XAM, bg=XANH_NHAT).grid(row=0, column=0, padx=(0, 6))
+            self.bien_lich_truc = tk.StringVar(
+                value=doc_env("GOOGLE_SHEET_ID_LICH_TRUC"))
+            tk.Entry(khung_lt, textvariable=self.bien_lich_truc, width=52,
+                     font=("Segoe UI", 9)).grid(row=0, column=1, padx=(0, 6))
+            ttk.Button(khung_lt, text=" Lưu link ",
+                       command=self.luu_link_lich_truc).grid(row=0, column=2)
+
             # --- Nút ---
             khung_nut = tk.Frame(root, bg=XANH_NHAT)
             khung_nut.pack(pady=4)
@@ -143,16 +184,21 @@ def chay_giao_dien() -> None:
             self.nut_chay = ttk.Button(khung_nut, text="  Cập nhật ngay  ",
                                        command=self.bam_cap_nhat)
             self.nut_chay.grid(row=0, column=0, padx=6)
-            ttk.Button(khung_nut, text="  Mở Google Sheet  ",
-                       command=self.mo_sheet).grid(row=0, column=1, padx=6)
+            ttk.Button(khung_nut, text="  Sheet Sale  ",
+                       command=lambda: self.mo_sheet("sale")).grid(row=0, column=1, padx=6)
+            ttk.Button(khung_nut, text="  Sheet CSKH  ",
+                       command=lambda: self.mo_sheet("cskh")).grid(row=0, column=2, padx=6)
             ttk.Button(khung_nut, text="  Mở file log  ",
-                       command=self.mo_log).grid(row=0, column=2, padx=6)
+                       command=self.mo_log).grid(row=0, column=3, padx=6)
 
             # --- Khung tiến trình ---
             self.khung_log = scrolledtext.ScrolledText(
                 root, font=("Consolas", 10), state="disabled", wrap="word",
                 bg="white", relief="flat", borderwidth=6)
             self.khung_log.pack(fill="both", expand=True, padx=12, pady=(6, 12))
+            # Màu dòng thông báo lịch trực: lỗi đỏ / kết nối OK xanh
+            self.khung_log.tag_configure("do", foreground=DO)
+            self.khung_log.tag_configure("xanh", foreground="#1E8E3E")
 
             self.ghi("Chào mừng! Bấm 'Cập nhật ngay' để chạy thủ công,")
             self.ghi("hoặc chờ đồng hồ đếm ngược - đến giờ hẹn ứng dụng tự cập nhật.\n")
@@ -180,10 +226,24 @@ def chay_giao_dien() -> None:
 
         # ------------------------------------------------------------------
         def ghi(self, text: str) -> None:
+            tag = ()
+            if "[LICH TRUC][LOI]" in text:
+                tag = ("do",)
+            elif "[LICH TRUC][OK]" in text or "Đã lưu link lịch trực" in text:
+                tag = ("xanh",)
             self.khung_log.configure(state="normal")
-            self.khung_log.insert("end", text + "\n")
+            self.khung_log.insert("end", text + "\n", tag)
             self.khung_log.see("end")
             self.khung_log.configure(state="disabled")
+
+        def luu_link_lich_truc(self) -> None:
+            sheet_id = rut_id_sheet(self.bien_lich_truc.get())
+            if not sheet_id:
+                self.ghi("Chưa nhập link/ID lịch trực.")
+                return
+            luu_env("GOOGLE_SHEET_ID_LICH_TRUC", sheet_id)
+            self.bien_lich_truc.set(sheet_id)
+            self.ghi(f"Đã lưu link lịch trực (ID: {sheet_id}) - áp dụng từ lần cập nhật sau.")
 
         def bam_cap_nhat(self) -> None:
             if not self.dang_chay:
@@ -248,10 +308,12 @@ def chay_giao_dien() -> None:
                     text=f"Lần chạy {gio} bị lỗi - sẽ thử lại theo lịch", fg=DO)
             self.cap_nhat_nhan_lan_sau()
 
-        def mo_sheet(self) -> None:
+        def mo_sheet(self, nhom: str = "sale") -> None:
             import config
-            if config.GOOGLE_SHEET_ID:
-                webbrowser.open(f"https://docs.google.com/spreadsheets/d/{config.GOOGLE_SHEET_ID}")
+            sheet_id = (config.GOOGLE_SHEET_ID_CSKH if nhom == "cskh"
+                        else config.GOOGLE_SHEET_ID)
+            if sheet_id:
+                webbrowser.open(f"https://docs.google.com/spreadsheets/d/{sheet_id}")
 
         def mo_log(self) -> None:
             if LOG_FILE.exists():

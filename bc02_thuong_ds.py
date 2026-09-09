@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Bảng BC02 "Thưởng DS Sale- CSKH" theo THÁNG, đẩy lên Google Sheet.
+"""Bảng BC02 "Thưởng DS" theo THÁNG, đẩy lên Google Sheet.
 
 Chạy:
     python bc02_thuong_ds.py            # tháng hiện tại
     python bc02_thuong_ds.py 2026-07    # tháng cụ thể
 
-Cấu trúc tab "BC02 Thưởng DS Sale- CSKH T08.2026" (mỗi tháng 1 tab):
+Mỗi bộ phận 1 tab ở TRANG TÍNH RIÊNG của bộ phận đó (.env: GOOGLE_SHEET_ID = Sale,
+GOOGLE_SHEET_ID_CSKH = CSKH): "BC02 Thưởng DS Sale T09.2026" / "BC02 Thưởng DS CSKH T09.2026".
+
+Cấu trúc tab (mỗi tháng 1 tab):
     STT | Tên | Bộ phận | Đơn chốt | Đơn hoàn tháng này | DS bán hàng
         | Tỷ lệ hoàn | Thưởng | % Thưởng | Thực nhận
     - Dòng Tổng nằm NGAY DƯỚI header (giống mẫu), nhân viên từ dòng 4
-    - Gồm tất cả nhân viên các bộ phận có chữ "sale" hoặc "cskh"
+    - Gồm nhân viên các bộ phận có chữ "sale" (tab Sale) / "cskh" (tab CSKH)
 
 Nguồn số liệu:
     - Đơn chốt / Đơn hoàn / DS bán hàng: tính từ đơn hàng của tháng trên Pancake
@@ -134,10 +137,15 @@ def parse_old_manual(old_values: list[list[str]] | None) -> dict[str, tuple]:
 
 
 def read_gr_bonus_totals(month: int, year: int) -> dict[str, int]:
-    """Đọc cột 'Tổng tháng' của 2 tab Thưởng Sale/CSKH GR: {tên NV: tổng thưởng tháng}."""
+    """Đọc cột 'Tổng tháng' của 2 tab Thưởng Sale/CSKH GR: {tên NV: tổng thưởng tháng}.
+
+    Mỗi nhóm đọc từ trang tính riêng của nhóm đó; tab CSKH chưa chuyển sang
+    trang tính mới thì đọc ở chỗ cũ (trang tính Sale)."""
     result: dict[str, int] = {}
-    for label in ("Sale", "CSKH"):
-        vals = google_sheet.read_table(f"Thưởng {label} GR T{month:02d}.{year}")
+    for kw, label in (("sale", "Sale"), ("cskh", "CSKH")):
+        vals = google_sheet.read_table(f"Thưởng {label} GR T{month:02d}.{year}", nhom=kw)
+        if not vals and kw == "cskh":
+            vals = google_sheet.read_table(f"Thưởng {label} GR T{month:02d}.{year}")
         if not vals or len(vals) < 3:
             continue
         header = vals[1]
@@ -160,12 +168,13 @@ def build_table(month: int, year: int, roster: list[tuple[str, dict]],
                 stats: dict[str, dict], old_manual: dict[str, tuple],
                 title_suffix: str = "",
                 bonus_totals: dict[str, int] | None = None,
-                hoan_truoc: dict[str, int] | None = None) -> list[list]:
+                hoan_truoc: dict[str, int] | None = None,
+                group_label: str = "SALE - CSKH") -> list[list]:
     n = len(roster)
     first_data_row, last_data_row = 4, 3 + n     # dòng sheet (1-based)
 
     values: list[list] = [
-        [f"THƯỞNG THÁNG SALE - CSKH THÁNG {month:02d}.{year}{title_suffix}"],
+        [f"THƯỞNG THÁNG {group_label.upper()} THÁNG {month:02d}.{year}{title_suffix}"],
         HEADER,
         # Dòng Tổng (dòng 3) - công thức SUM để tự cập nhật khi sửa tay
         # Công thức dùng dấu ; (locale Việt Nam dùng , làm dấu thập phân)
@@ -234,24 +243,12 @@ def main() -> None:
                today - timedelta(days=2))
     if last < first:
         raise SystemExit(f"Tháng {month}/{year}: chưa có ngày nào đủ 2 ngày chờ chốt.")
-    tab_title = f"BC02 Thưởng DS Sale- CSKH T{month:02d}.{year}"
 
-    # Tab đã chốt sổ thì không sửa nữa
-    old_values = google_sheet.read_table(tab_title)
-    if old_values and old_values[0] and "ĐÃ CHỐT SỔ" in old_values[0][0]:
-        raise SystemExit(f"Tab '{tab_title}' ĐÃ CHỐT SỔ - không sửa nữa.")
-
-    # Giữ lại số Thưởng / % Thưởng đã nhập tay trên tab cũ (nếu có)
-    old_manual = parse_old_manual(old_values)
+    # Tab gộp Sale+CSKH của bản cũ (ở trang tính Sale) - nguồn kế thừa khi chưa tách
+    old_gop = google_sheet.read_table(f"BC02 Thưởng DS Sale- CSKH T{month:02d}.{year}")
 
     client = PancakeClient(api_key)
     staff = load_staff(client, shop_id)
-    roster = sorted(
-        ((uid, info) for uid, info in staff.items()
-         if any(kw in info["dept"].lower() for kw in GROUP_KEYWORDS)),
-        key=roster_sort_key,
-    )
-    print(f"Bảng gồm {len(roster)} nhân viên các bộ phận Sale + CSKH")
     print(f"Lấy đơn hàng {first.strftime('%d/%m')} - {last.strftime('%d/%m/%Y')} từ Pancake POS ...")
     try:
         stats = fetch_month_stats(client, shop_id, first, last, tz)
@@ -263,20 +260,40 @@ def main() -> None:
         print("CHÚ Ý: chưa đọc được cột Tổng tháng từ 2 tab Thưởng GR - cột Thưởng sẽ trống.")
     # Đơn hoàn tháng trước: TẠM THỜI để 0 theo yêu cầu (bật lại bằng dem_hoan_thang_truoc)
     hoan_truoc: dict[str, int] = {}
-    values = build_table(month, year, roster, stats, old_manual,
-                         bonus_totals=bonus_totals, hoan_truoc=hoan_truoc)
-    url = google_sheet.write_bc02_table(tab_title, values)
 
-    tong_chot = sum(stats.get(uid, {}).get("chot", 0) for uid, _ in roster)
-    tong_hoan = sum(stats.get(uid, {}).get("hoan", 0) for uid, _ in roster)
-    tong_ds = sum(stats.get(uid, {}).get("ds", 0) for uid, _ in roster)
-    tong_ht = sum(hoan_truoc.get(uid, 0) for uid, _ in roster)
-    print(f"\nTổng đơn chốt: {tong_chot} | Hoàn tháng này: {tong_hoan} | "
-          f"Hoàn tháng trước: {tong_ht} | DS bán hàng: {vnd(tong_ds)}")
-    if old_manual:
-        print(f"Đã giữ nguyên Thưởng/% Thưởng nhập tay của {len(old_manual)} nhân viên.")
-    print("Cột Thưởng = Tổng tháng từ 2 tab Thưởng GR; % Thưởng (nền vàng) nhập tay; Thực nhận tự tính.")
-    print(f"\nĐã ghi tab '{tab_title}': {url}")
+    # Mỗi bộ phận 1 tab BC02 ở trang tính riêng của bộ phận đó
+    for kw, label in (("sale", "Sale"), ("cskh", "CSKH")):
+        tab_title = f"BC02 Thưởng DS {label} T{month:02d}.{year}"
+        old_values = google_sheet.read_table(tab_title, nhom=kw) or old_gop
+
+        # Tab đã chốt sổ thì không sửa nữa
+        if old_values and old_values[0] and "ĐÃ CHỐT SỔ" in old_values[0][0]:
+            print(f"Tab '{tab_title}' ĐÃ CHỐT SỔ - không sửa nữa.")
+            continue
+
+        # Giữ lại số Thưởng / % Thưởng đã nhập tay trên tab cũ (nếu có)
+        old_manual = parse_old_manual(old_values)
+        roster = sorted(
+            ((uid, info) for uid, info in staff.items() if kw in info["dept"].lower()),
+            key=roster_sort_key,
+        )
+        values = build_table(month, year, roster, stats, old_manual,
+                             bonus_totals=bonus_totals, hoan_truoc=hoan_truoc,
+                             group_label=label)
+        url = google_sheet.write_bc02_table(tab_title, values, nhom=kw)
+
+        tong_chot = sum(stats.get(uid, {}).get("chot", 0) for uid, _ in roster)
+        tong_hoan = sum(stats.get(uid, {}).get("hoan", 0) for uid, _ in roster)
+        tong_ds = sum(stats.get(uid, {}).get("ds", 0) for uid, _ in roster)
+        tong_ht = sum(hoan_truoc.get(uid, 0) for uid, _ in roster)
+        print(f"[OK] '{tab_title}' ({len(roster)} NV): đơn chốt {tong_chot} | "
+              f"hoàn tháng này {tong_hoan} | hoàn tháng trước {tong_ht} | "
+              f"DS bán hàng {vnd(tong_ds)}")
+        if old_manual:
+            print(f"  Đã giữ nguyên Thưởng/% Thưởng nhập tay của {len(old_manual)} nhân viên.")
+        print(f"  {url}")
+
+    print("\nCột Thưởng = Tổng tháng từ 2 tab Thưởng GR; % Thưởng nhập tay; Thực nhận tự tính.")
 
 
 if __name__ == "__main__":

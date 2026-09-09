@@ -65,16 +65,35 @@ Kết quả:
 ## Bảng "Đề Xuất chi thưởng GR" theo tháng
 
 ```powershell
-python thuong_thang.py            # chạy hàng ngày: cập nhật cả 3 tab + tự chốt sổ tháng trước
+python thuong_thang.py            # chạy hàng ngày: cập nhật cả 5 tab + tự chốt sổ tháng trước
 python thuong_thang.py 2026-08    # tháng đã qua: CHỐT SỔ ngay (tính lại cả tháng rồi khóa)
 ```
 
-MỘT lệnh lấy dữ liệu MỘT lần rồi cập nhật cả 3 tab:
+MỘT lệnh lấy dữ liệu MỘT lần rồi cập nhật cả 5 tab trên HAI TRANG TÍNH riêng
+(`.env`: `GOOGLE_SHEET_ID` = trang tính Sale, `GOOGLE_SHEET_ID_CSKH` = trang tính CSKH):
+
+Trang tính **Sale** (không có thông tin CSKH):
 1. **Thưởng Sale GR T09.2026** - thưởng ngày bộ phận Sale
-2. **Thưởng CSKH GR T09.2026** - thưởng ngày bộ phận CSKH
-3. **Doanh số NV T09.2026** - ma trận DOANH SỐ ngày từng nhân viên (cùng cấu trúc
+2. **Doanh số Sale T09.2026** - ma trận DOANH SỐ ngày nhân viên Sale (cùng cấu trúc
    bảng thưởng, để đối chiếu: doanh số ô nào -> thưởng ô đó theo mốc)
-4. **BC02 Thưởng DS Sale- CSKH T09.2026** - thưởng doanh số tháng (giữ cột % nhập tay)
+3. **Doanh số Page T09.2026** - ma trận DOANH THU ngày theo PAGE NGUỒN, tính GIỐNG
+   báo cáo Revenue trên POS: gộp theo nguồn đơn hàng (page quảng cáo dẫn đơn về,
+   trường `account`), CHỈ đơn chốt (không gồm hoàn), tính vào NGÀY XÁC NHẬN đơn;
+   chỉ tính đơn do nhân viên bộ phận Sale phụ trách (dựng từ đơn thô `api_data/`,
+   xếp theo tổng tháng giảm dần; trang tính CSKH có tab cùng tên lọc theo CSKH)
+4. **BC02 Thưởng DS Sale T09.2026** - thưởng doanh số tháng bộ phận Sale
+   (giữ cột % nhập tay)
+
+Trang tính **CSKH** (không có thông tin Sale):
+4. **Thưởng CSKH GR T09.2026** - thưởng ngày bộ phận CSKH
+5. **Doanh số CSKH T09.2026** - ma trận DOANH SỐ ngày nhân viên CSKH
+6. **BC02 Thưởng DS CSKH T09.2026** - thưởng doanh số tháng bộ phận CSKH
+
+Lần chạy đầu sau khi tách: dữ liệu CSKH của tháng chưa khóa được tự CHUYỂN từ trang
+tính cũ sang trang tính CSKH (kế thừa số đã chốt); các tab gộp cũ ("Doanh số NV",
+"BC02 Thưởng DS Sale- CSKH") được tách thành tab riêng từng bộ phận rồi xóa.
+Trang tính CSKH phải chia sẻ quyền Editor cho email service account
+(`client_email` trong `service_account.json`).
 
 Logic "chốt ngày, chốt sổ":
 - **Trễ 2 ngày**: hôm nay 29 thì bảng chỉ hiển thị đến 27 (2 ngày cuối trạng thái đơn
@@ -84,7 +103,7 @@ Logic "chốt ngày, chốt sổ":
   không gọi API đơn hàng (~5 giây)
 - **Chốt sổ cuối tháng**: từ mùng 2 tháng sau, chạy mặc định sẽ tự gọi lại API một lần
   trọn tháng trước để sửa thưởng lần cuối (bắt đơn hoàn/hủy muộn), đóng dấu
-  **"ĐÃ CHỐT SỔ"** lên tiêu đề 3 tab - từ đó tab bị khóa, mọi lần chạy sau bỏ qua
+  **"ĐÃ CHỐT SỔ"** lên tiêu đề các tab - từ đó tab bị khóa, mọi lần chạy sau bỏ qua
 
 - Ghi vào tab `Thưởng GR T<tháng>.<năm>` trong cùng Google Sheet
 - Cấu trúc: STT | Họ và tên | Bộ phận | từng ngày trong tháng | Tổng tháng; dòng cuối

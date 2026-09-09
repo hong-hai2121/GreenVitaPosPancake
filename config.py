@@ -25,6 +25,12 @@ API_DATA_THANG_GIU = 2
 SERVICE_ACCOUNT_FILE = BASE_DIR / os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "service_account.json")
 # ID Google Sheet đích; để trống thì lần chạy --gsheet đầu tiên sẽ tự tạo sheet mới
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "").strip()
+# ID trang tính RIÊNG cho bộ phận CSKH (trang tính GOOGLE_SHEET_ID ở trên dành cho Sale)
+GOOGLE_SHEET_ID_CSKH = os.getenv("GOOGLE_SHEET_ID_CSKH", "").strip()
+# Trang tính "Lịch trực ngày nghỉ - Greenvita": đăng ký làm CHỦ NHẬT
+# (Chủ nhật không đăng ký -> thưởng ngày đó = 0)
+GOOGLE_SHEET_ID_LICH_TRUC = os.getenv(
+    "GOOGLE_SHEET_ID_LICH_TRUC", "1QuUke2Lqms0pfYSRz8FdEExSXaSxAFyvUvaq0yuma8c").strip()
 # Email được chia sẻ quyền chỉnh sửa khi tự tạo sheet mới
 GOOGLE_SHARE_EMAIL = os.getenv("GOOGLE_SHARE_EMAIL", "").strip()
 GOOGLE_SCOPES = [

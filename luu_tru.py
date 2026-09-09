@@ -45,6 +45,19 @@ def luu_don_theo_ngay(orders_by_day: dict[date, list]) -> list[Path]:
     return written
 
 
+def doc_don_theo_ngay(days: list[date]) -> dict[date, list]:
+    """Đọc lại đơn thô đã lưu của các ngày; ngày thiếu file -> danh sách rỗng."""
+    result: dict[date, list] = {}
+    for day in days:
+        path = API_DATA_DIR / f"donhang_{day.isoformat()}.json"
+        try:
+            with open(path, encoding="utf-8") as f:
+                result[day] = json.load(f).get("orders") or []
+        except (OSError, ValueError):
+            result[day] = []
+    return result
+
+
 def don_dep(today: date | None = None) -> int:
     """Xóa file donhang_ của tháng cũ, giữ config.API_DATA_THANG_GIU tháng gần nhất."""
     today = today or date.today()

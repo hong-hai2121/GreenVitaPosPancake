@@ -43,6 +43,15 @@ def _with_retry(fn):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
+                if (isinstance(e, gspread.exceptions.APIError)
+                        and getattr(getattr(e, "response", None), "status_code", None) == 403):
+                    raise SystemExit(
+                        "Google Sheets báo KHÔNG CÓ QUYỀN GHI (403).\n"
+                        "Mở trang tính -> Chia sẻ -> thêm email service account "
+                        "(client_email trong service_account.json) với quyền EDITOR "
+                        "(Người chỉnh sửa), rồi chạy lại.\n"
+                        f"Chi tiết lỗi: {e}"
+                    ) from e
                 if not _is_transient(e):
                     raise
                 print(f"  Google Sheets lỗi tạm thời ({type(e).__name__}), "
@@ -80,26 +89,104 @@ def _save_sheet_id_to_env(sheet_id: str) -> None:
     env_path.write_text(text, encoding="utf-8")
 
 
-_cached_ss = None
+_cached_ss: dict[str, "gspread.Spreadsheet"] = {}
+_cached_client = None
 
 
-def _spreadsheet() -> "gspread.Spreadsheet":
-    """Kết nối + mở spreadsheet, cache lại để nhiều thao tác trong 1 lần chạy dùng chung."""
-    global _cached_ss
-    if _cached_ss is None:
-        client = _connect()
-        _cached_ss, _ = _open_or_create(client)
-    return _cached_ss
+def _spreadsheet(nhom: str = "sale") -> "gspread.Spreadsheet":
+    """Mở trang tính theo nhóm: "sale" = GOOGLE_SHEET_ID (trang tính cũ),
+    "cskh" = GOOGLE_SHEET_ID_CSKH (trang tính riêng của CSKH).
+
+    Cache lại để nhiều thao tác trong 1 lần chạy dùng chung."""
+    global _cached_client
+    if nhom not in _cached_ss:
+        if _cached_client is None:
+            _cached_client = _connect()
+        if nhom == "cskh":
+            if not config.GOOGLE_SHEET_ID_CSKH:
+                raise SystemExit(
+                    "Chưa có GOOGLE_SHEET_ID_CSKH trong .env (ID trang tính riêng cho CSKH)."
+                )
+            try:
+                _cached_ss[nhom] = _cached_client.open_by_key(config.GOOGLE_SHEET_ID_CSKH)
+            except gspread.exceptions.APIError as e:
+                raise SystemExit(
+                    "Không mở được trang tính CSKH (GOOGLE_SHEET_ID_CSKH).\n"
+                    "Kiểm tra: trang tính đó đã chia sẻ quyền Editor cho email service account\n"
+                    "(client_email trong service_account.json) chưa?\n"
+                    f"Chi tiết lỗi: {e}"
+                ) from e
+        else:
+            _cached_ss[nhom], _ = _open_or_create(_cached_client)
+    return _cached_ss[nhom]
 
 
 @_with_retry
-def read_table(tab_title: str) -> list[list[str]] | None:
+def read_table(tab_title: str, nhom: str = "sale") -> list[list[str]] | None:
     """Đọc toàn bộ giá trị (đã định dạng) của 1 tab; None nếu tab chưa tồn tại."""
-    ss = _spreadsheet()
+    ss = _spreadsheet(nhom)
     for ws in ss.worksheets():
         if ws.title == tab_title:
             return ws.get_all_values()
     return None
+
+
+_TAB_THANG_RE = re.compile(r"T(\d{2})\.(\d{4})\s*$")
+
+
+def _tab_rank(t: str) -> int:
+    """Thứ tự tab trong cùng 1 tháng: Thưởng -> Doanh số NV -> Doanh số Page -> BC02."""
+    if t.startswith("thưởng"):
+        return 0
+    if t.startswith("doanh số page"):
+        return 2
+    if t.startswith("doanh số"):
+        return 1
+    if t.startswith("bc02"):
+        return 3
+    return 4
+
+
+def _tab_sort_key(title: str) -> tuple:
+    m = _TAB_THANG_RE.search(title)
+    if not m:
+        return (1, 0, 0, title)                # tab không theo tháng -> xếp cuối
+    thang, nam = int(m.group(1)), int(m.group(2))
+    return (0, -(nam * 12 + thang), _tab_rank(title.lower()), title)
+
+
+@_with_retry
+def sap_xep_tab(nhom: str = "sale") -> None:
+    """Sắp xếp tab: THÁNG MỚI NHẤT bên TRÁI; trong 1 tháng theo thứ tự
+    Thưởng -> Doanh số -> BC02. Tab mặc định trống ('Trang tính1'/'Sheet1')
+    bị xóa nếu đã có tab dữ liệu."""
+    ss = _spreadsheet(nhom)
+    sheets = ss.worksheets()
+    if any(_TAB_THANG_RE.search(ws.title) for ws in sheets) and len(sheets) > 1:
+        for ws in sheets:
+            if (ws.title.startswith(("Trang tính", "Sheet"))
+                    and not ws.get_all_values()):        # hoàn toàn trống
+                ss.del_worksheet(ws)
+        sheets = ss.worksheets()
+    order = sorted(sheets, key=lambda ws: _tab_sort_key(ws.title))
+    if [ws.id for ws in order] == [ws.id for ws in sheets]:
+        return
+    ss.batch_update({"requests": [
+        {"updateSheetProperties": {"properties": {"sheetId": ws.id, "index": i},
+                                   "fields": "index"}}
+        for i, ws in enumerate(order)
+    ]})
+
+
+@_with_retry
+def delete_tab(tab_title: str, nhom: str = "sale") -> bool:
+    """Xóa 1 tab nếu tồn tại. Trả về True nếu đã xóa, False nếu không có tab đó."""
+    ss = _spreadsheet(nhom)
+    for ws in ss.worksheets():
+        if ws.title == tab_title:
+            ss.del_worksheet(ws)
+            return True
+    return False
 
 
 def _open_or_create(client: gspread.Client) -> tuple[gspread.Spreadsheet, bool]:
@@ -374,9 +461,10 @@ def _style_bc02(ss, ws, n_rows: int, n_cols: int) -> None:
 
 
 @_with_retry
-def write_bc02_table(tab_title: str, values: list[list]) -> str:
-    """Ghi đè + tô màu tab BC02 (thưởng doanh số tháng). Trả về URL spreadsheet."""
-    ss = _spreadsheet()
+def write_bc02_table(tab_title: str, values: list[list], nhom: str = "sale") -> str:
+    """Ghi đè + tô màu tab BC02 (thưởng doanh số tháng) vào trang tính của `nhom`.
+    Trả về URL spreadsheet."""
+    ss = _spreadsheet(nhom)
     ws = _get_or_create_ws(ss, tab_title, max(len(values) + 5, 50),
                            max(len(values[1]) + 2, 12))
     ws.clear()
@@ -390,14 +478,15 @@ def write_bc02_table(tab_title: str, values: list[list]) -> str:
 @_with_retry
 def write_table(tab_title: str, values: list[list], money_range: str | None = None,
                 sunday_cols: list[int] | None = None,
-                rules_block: list[list] | None = None) -> str:
+                rules_block: list[list] | None = None, nhom: str = "sale") -> str:
     """Ghi đè toàn bộ 1 tab bằng ma trận `values` (bảng thưởng tháng) rồi tô màu.
 
     - Dòng 1: tiêu đề; dòng 2: header; dòng cuối: Tổng; 3 cột đầu cố định.
     - rules_block: khối quy tắc thưởng ghi thêm phía dưới bảng (bắt đầu cột B).
+    - nhom: ghi vào trang tính của nhóm nào ("sale"/"cskh").
     Trả về URL của spreadsheet.
     """
-    ss = _spreadsheet()
+    ss = _spreadsheet(nhom)
 
     block_rows = len(rules_block) + 3 if rules_block else 0
     n_rows = max(len(values) + block_rows + 5, 50)

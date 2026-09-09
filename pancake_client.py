@@ -7,11 +7,15 @@ Xác thực: truyền api_key qua query string.
 """
 from __future__ import annotations
 
+import time
 from typing import Iterator, Optional
 
 import requests
 
 BASE_URL = "https://pos.pages.fm/api/v1"
+
+# Server Pancake thỉnh thoảng trả chậm/lỗi tạm khi kéo trang lớn (1000 đơn)
+_RETRY_DELAYS = (5, 15, 30)   # giây chờ trước mỗi lần thử lại
 
 
 class PancakeError(Exception):
@@ -19,19 +23,33 @@ class PancakeError(Exception):
 
 
 class PancakeClient:
-    def __init__(self, api_key: str, timeout: int = 30):
+    def __init__(self, api_key: str, timeout: int = 90):
         self.api_key = api_key
         self.timeout = timeout
         self.session = requests.Session()
 
     def _get(self, path: str, params: Optional[dict] = None) -> dict:
+        """GET (chỉ đọc) - tự thử lại khi timeout / rớt mạng / server lỗi 5xx."""
         params = dict(params or {})
         params["api_key"] = self.api_key
         url = f"{BASE_URL}{path}"
-        try:
-            resp = self.session.get(url, params=params, timeout=self.timeout)
-        except requests.ConnectionError as e:
-            raise PancakeError(f"Không kết nối được tới {BASE_URL}. Kiểm tra mạng. ({e})") from e
+        resp = None
+        for delay in (*_RETRY_DELAYS, None):
+            try:
+                resp = self.session.get(url, params=params, timeout=self.timeout)
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if delay is None:
+                    raise PancakeError(
+                        f"Không gọi được {BASE_URL} (mạng chậm hoặc rớt): {e}") from e
+                print(f"  Pancake API {type(e).__name__}, thử lại sau {delay}s ...", flush=True)
+                time.sleep(delay)
+                continue
+            if resp.status_code >= 500 and delay is not None:
+                print(f"  Pancake API lỗi HTTP {resp.status_code}, "
+                      f"thử lại sau {delay}s ...", flush=True)
+                time.sleep(delay)
+                continue
+            break
 
         if resp.status_code == 401 or resp.status_code == 403:
             raise PancakeError("API key không hợp lệ hoặc không có quyền truy cập (HTTP %s)." % resp.status_code)

@@ -226,6 +226,7 @@ C_TOTALCOL_BG = _rgb("FFF3D6")   # cột Tổng tháng - vàng nhạt
 C_TOTALROW_BG = _rgb("DCEDE3")   # dòng Tổng - xanh nhạt
 C_WHITE = _rgb("FFFFFF")
 C_BORDER = _rgb("B7C7BD")
+C_NOTE_TEXT = _rgb("C0392B")     # ghi chú đỏ nối sau tiêu đề
 # Cột CHỦ NHẬT - tông cam để nhận biết ngay
 C_SUNDAY_HEADER = _rgb("D97706")   # header cam đậm
 C_SUNDAY_BG = _rgb("FDF1DC")       # thân cột cam rất nhạt
@@ -246,11 +247,13 @@ def _delete_conditional_rules(ss, sheet_id: int) -> list[dict]:
 
 def _style_month_table(ss, ws, n_rows: int, n_cols: int, n_fixed_cols: int = 3,
                        sunday_cols: list[int] | None = None,
-                       extra_block: tuple[int, int, int] | None = None) -> None:
+                       extra_block: tuple[int, int, int] | None = None,
+                       title_note_start: int | None = None) -> None:
     """Tô màu bảng thưởng: title, header, sọc xen kẽ, ô đạt thưởng, tổng, khung, độ rộng cột.
 
     sunday_cols: chỉ số cột (0-based) của các ngày Chủ nhật -> tô tông cam nhận biết.
     extra_block: (dòng bắt đầu 0-based, số dòng, số cột) của khối quy tắc thưởng phía dưới.
+    title_note_start: vị trí ký tự bắt đầu phần ghi chú trong ô tiêu đề -> tô đỏ từ đó.
     """
     sunday_cols = sunday_cols or []
     sid = ws.id
@@ -279,6 +282,20 @@ def _style_month_table(ss, ws, n_rows: int, n_cols: int, n_fixed_cols: int = 3,
                       {"textFormat": {"bold": True, "fontSize": 13,
                                       "foregroundColor": C_TITLE_TEXT}},
                       "userEnteredFormat.textFormat"))
+    # 1b. Ghi chú nối sau tiêu đề: tô ĐỎ riêng phần ghi chú (rich text trong cùng ô A1).
+    #     Luôn gửi request này để XÓA run cũ khi tiêu đề đổi độ dài (vd thêm "ĐÃ CHỐT SỔ"),
+    #     vì textFormatRuns không nằm trong userEnteredFormat nên bước reset ở trên không xóa.
+    title_cell: dict = {}
+    if title_note_start:
+        title_cell = {"textFormatRuns": [
+            {"startIndex": 0,
+             "format": {"bold": True, "fontSize": 13, "foregroundColor": C_TITLE_TEXT}},
+            {"startIndex": title_note_start,
+             "format": {"bold": True, "fontSize": 11, "foregroundColor": C_NOTE_TEXT}},
+        ]}
+    req.append({"updateCells": {"range": grid(0, 1, 0, 1),
+                                "rows": [{"values": [title_cell]}],
+                                "fields": "textFormatRuns"}})
     # 2. Header: nền xanh đậm, chữ trắng đậm, căn giữa
     req.append(repeat(grid(1, 2, 0, n_cols),
                       {"backgroundColor": C_HEADER_BG,
@@ -476,12 +493,14 @@ def write_bc02_table(tab_title: str, values: list[list], nhom: str = "sale") -> 
 @_with_retry
 def write_table(tab_title: str, values: list[list], money_range: str | None = None,
                 sunday_cols: list[int] | None = None,
-                rules_block: list[list] | None = None, nhom: str = "sale") -> str:
+                rules_block: list[list] | None = None, nhom: str = "sale",
+                title_note: str | None = None) -> str:
     """Ghi đè toàn bộ 1 tab bằng ma trận `values` (bảng thưởng tháng) rồi tô màu.
 
     - Dòng 1: tiêu đề; dòng 2: header; dòng cuối: Tổng; 3 cột đầu cố định.
     - rules_block: khối quy tắc thưởng ghi thêm phía dưới bảng (bắt đầu cột B).
     - nhom: ghi vào trang tính của nhóm nào ("sale"/"cskh").
+    - title_note: đoạn ghi chú đã nối sẵn trong ô tiêu đề -> tô ĐỎ riêng đoạn đó.
     Trả về URL của spreadsheet.
     """
     ss = _spreadsheet(nhom)
@@ -513,6 +532,11 @@ def write_table(tab_title: str, values: list[list], money_range: str | None = No
                   value_input_option="USER_ENTERED")
         extra = (start_row - 1, len(rules_block), width)  # 0-based cho styling
 
+    note_start = -1
+    if title_note and values and values[0]:
+        note_start = str(values[0][0]).find(title_note)
+
     _style_month_table(ss, ws, n_rows=len(values), n_cols=len(values[1]),
-                       sunday_cols=sunday_cols, extra_block=extra)
+                       sunday_cols=sunday_cols, extra_block=extra,
+                       title_note_start=note_start if note_start > 0 else None)
     return ss.url

@@ -50,6 +50,9 @@ if hasattr(sys.stdout, "reconfigure"):
 
 GROUPS = [("sale", "Sale"), ("cskh", "CSKH")]
 LOCK_MARK = "ĐÃ CHỐT SỔ"
+# Ghi chú nối sau tiêu đề tab Thưởng GR, được tô ĐỎ riêng (xem google_sheet.write_table)
+GHI_CHU_THUONG = ("Lưu ý: bảng này chỉ tính TIỀN THƯỞNG theo doanh số, "
+                  "CHƯA bao gồm lương làm thêm ngày Chủ nhật.")
 SETTLE_DELAY_DAYS = 2      # số ngày trễ trước khi một ngày được đưa vào bảng
 FETCH_WINDOW_DAYS = 7      # mỗi lần chạy gọi API ghi đè kho bấy nhiêu ngày gần nhất
 
@@ -239,7 +242,8 @@ def build_matrix(
     first_day_col = 4
     header = ["STT", "Họ và tên", "Bộ phận"] + [d.strftime("%d/%m/%Y") for d in days] + ["Tổng tháng"]
     values: list[list] = [
-        [f"Đề Xuất chi thưởng GR Tháng {month_label} - Bộ phận {group_label}{title_suffix}"],
+        [f"Đề Xuất chi thưởng GR Tháng {month_label} - Bộ phận {group_label}"
+         f"{title_suffix}  —  {GHI_CHU_THUONG}"],
         header,
     ]
     for idx, (uid, info) in enumerate(roster, start=1):
@@ -543,7 +547,8 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
         sunday_cols = [3 + i for i, d in enumerate(days) if d.weekday() == 6]
         google_sheet.write_table(tabs[keyword], values,
                                  money_range=f"D3:{end_col}{len(values)}",
-                                 sunday_cols=sunday_cols, nhom=keyword)
+                                 sunday_cols=sunday_cols, nhom=keyword,
+                                 title_note=GHI_CHU_THUONG)
         da_ghi.add(keyword)
         total = sum(sum(v for v in row[3:-1] if isinstance(v, int)) for row in values[2:-1])
         print(f"  [OK] {tabs[keyword]}: {len(roster)} NV, tổng thưởng {vnd(total)}")

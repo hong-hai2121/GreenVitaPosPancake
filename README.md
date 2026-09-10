@@ -159,6 +159,9 @@ python bc02_thuong_ds.py 2026-07    # tháng cụ thể
 tự chạy cập nhật ngay, hiển thị tiến trình trong khung log, rồi hiện **đồng hồ
 đếm ngược tới 9h sáng hôm sau** và tự chạy tiếp. Có nút **Cập nhật ngay**,
 **Mở Google Sheet**, **Mở file log**.
+- Tạo icon trên Desktop (chạy 1 lần, hoặc chạy lại khi đổi máy/đổi thư mục):
+  `python tao_loi_tat.py` -> vẽ `icon_app.ico` và tạo lối tắt
+  **GreenVita - Cập nhật thưởng** trên Desktop (chạy bằng `pythonw`, không hiện cửa sổ đen).
 
 **Cách 2 - Chạy ngầm dự phòng:** Task Scheduler của Windows có task
 **GreenVita_CapNhatThuong** chạy `pythonw app_cap_nhat.pyw --ngam` lúc **9:00 sáng**

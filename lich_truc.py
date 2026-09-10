@@ -33,11 +33,24 @@ _cache: dict | None = None
 def doc_dang_ky() -> dict[str, dict]:
     """{nhóm: {"cols": {(ngày, tháng) có cột}, "reg": {tên chuẩn hóa: {(ngày, tháng) đã đăng ký}}}}.
 
-    Đọc 1 lần mỗi lần chạy (cache)."""
+    Đọc 1 lần mỗi lần chạy (cache). Google trả 429/5xx tạm thời -> tự thử lại
+    (cùng cơ chế với các tab thưởng/doanh số) thay vì bỏ qua trừ thưởng Chủ nhật.
+    """
     global _cache
     if _cache is not None:
         return _cache
+    try:
+        _cache = _doc_tu_google()
+    except SystemExit as e:
+        # _with_retry đổi 403 thành SystemExit (dành cho trang tính ghi). Lịch trực
+        # chỉ là dữ liệu phụ: KHÔNG được dừng cả lần cập nhật, chỉ báo lỗi để cảnh báo.
+        raise PermissionError(
+            "Service account chưa được chia sẻ Lịch trực ngày nghỉ (403)") from e
+    return _cache
 
+
+@google_sheet._with_retry
+def _doc_tu_google() -> dict[str, dict]:
     ss = google_sheet._connect().open_by_key(config.GOOGLE_SHEET_ID_LICH_TRUC)
     worksheets = {chuan_hoa_ten(w.title): w for w in ss.worksheets()}
     out: dict[str, dict] = {}
@@ -64,5 +77,4 @@ def doc_dang_ky() -> dict[str, dict]:
                             if j < len(row) and "dang k" in chuan_hoa_ten(row[j])}
                     reg[name] = reg.get(name, set()) | days
         out[nhom] = {"cols": cols, "reg": reg}
-    _cache = out
-    return _cache
+    return out

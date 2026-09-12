@@ -3,7 +3,8 @@
 
 - Nháy đúp file này -> mở cửa sổ: tự chạy cập nhật ngay, hiển thị tiến trình,
   rồi ĐẾM NGƯỢC tới 9h sáng hôm sau và tự chạy tiếp.
-- Nút bấm: Cập nhật ngay / Sheet Sale / Sheet CSKH / Mở file log.
+- Nút bấm: Cập nhật ngay / Sheet Sale / Sheet CSKH / Mở file log;
+  ô "Link lịch trực CN" có nút Lưu link và Mở lịch trực (mở trang tính đang dùng).
 - Chế độ chạy ngầm cho Task Scheduler:  pythonw app_cap_nhat.pyw --ngam
   (chạy 1 lần, ghi log rồi thoát - không mở cửa sổ).
 
@@ -171,10 +172,12 @@ def chay_giao_dien() -> None:
                      fg=XAM, bg=XANH_NHAT).grid(row=0, column=0, padx=(0, 6))
             self.bien_lich_truc = tk.StringVar(
                 value=doc_env("GOOGLE_SHEET_ID_LICH_TRUC"))
-            tk.Entry(khung_lt, textvariable=self.bien_lich_truc, width=52,
+            tk.Entry(khung_lt, textvariable=self.bien_lich_truc, width=46,
                      font=("Segoe UI", 9)).grid(row=0, column=1, padx=(0, 6))
             ttk.Button(khung_lt, text=" Lưu link ",
                        command=self.luu_link_lich_truc).grid(row=0, column=2)
+            ttk.Button(khung_lt, text=" Mở lịch trực ",
+                       command=self.mo_lich_truc).grid(row=0, column=3, padx=(6, 0))
 
             # --- Nút ---
             khung_nut = tk.Frame(root, bg=XANH_NHAT)
@@ -244,6 +247,16 @@ def chay_giao_dien() -> None:
             luu_env("GOOGLE_SHEET_ID_LICH_TRUC", sheet_id)
             self.bien_lich_truc.set(sheet_id)
             self.ghi(f"Đã lưu link lịch trực (ID: {sheet_id}) - áp dụng từ lần cập nhật sau.")
+
+        def mo_lich_truc(self) -> None:
+            """Mở trang tính Lịch trực đang dùng trên trình duyệt (link trong ô bên cạnh)."""
+            sheet_id = rut_id_sheet(self.bien_lich_truc.get()) or doc_env(
+                "GOOGLE_SHEET_ID_LICH_TRUC")
+            if not sheet_id:
+                self.ghi("Chưa có link/ID lịch trực để mở.")
+                return
+            webbrowser.open(f"https://docs.google.com/spreadsheets/d/{sheet_id}")
+            self.ghi(f"Đã mở lịch trực (ID: {sheet_id}) trên trình duyệt.")
 
         def bam_cap_nhat(self) -> None:
             if not self.dang_chay:

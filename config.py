@@ -88,6 +88,14 @@ BONUS_TIERS_BY_GROUP = {
     },
 }
 
+# PHỤ CẤP đi làm CHỦ NHẬT (đồng / 1 Chủ nhật có "Đăng kí làm" trên Lịch trực).
+# CỘNG THẲNG vào ô Chủ nhật trên bảng thưởng GR (= thưởng theo mốc + phụ cấp, kể cả
+# khi không đạt mốc nào; 1 người nhận 1 lần dù có nhiều tài khoản Pancake) -> Tổng
+# tháng / BC02 đã gồm phụ cấp. Khối "Đăng kí làm Chủ nhật" phía dưới tách riêng
+# "<phụ cấp> lương + <thưởng> thưởng" để soát. Đổi số ở đây xong chạy:
+#     python thuong_thang.py --tinh-lai      (áp lại cho các ngày đã lên bảng)
+PHU_CAP_CHU_NHAT = {"sale": 100_000, "cskh": 200_000}
+
 # Ý nghĩa mã trạng thái đơn hàng của Pancake POS
 ORDER_STATUS = {
     0: "Mới",

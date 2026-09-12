@@ -51,8 +51,9 @@ if hasattr(sys.stdout, "reconfigure"):
 GROUPS = [("sale", "Sale"), ("cskh", "CSKH")]
 LOCK_MARK = "ĐÃ CHỐT SỔ"
 # Ghi chú nối sau tiêu đề tab Thưởng GR, được tô ĐỎ riêng (xem google_sheet.write_table)
-GHI_CHU_THUONG = ("Lưu ý: bảng này chỉ tính TIỀN THƯỞNG theo doanh số, "
-                  "CHƯA bao gồm lương làm thêm ngày Chủ nhật.")
+GHI_CHU_THUONG = ("Lưu ý: ô Chủ nhật của người có 'Đăng kí làm' trên Lịch trực "
+                  "ĐÃ CỘNG phụ cấp đi làm Chủ nhật (Sale 100.000 / CSKH 200.000) vào "
+                  "thưởng doanh số - xem tách riêng ở bảng Đăng kí làm phía dưới.")
 SETTLE_DELAY_DAYS = 2      # số ngày trễ trước khi một ngày được đưa vào bảng
 FETCH_WINDOW_DAYS = 7      # mỗi lần chạy gọi API ghi đè kho bấy nhiêu ngày gần nhất
 
@@ -66,35 +67,40 @@ def bonus_for(doanh_so: int, day: date, tiers_cfg: dict) -> int:
     return 0
 
 
-def dang_ky_chu_nhat(roster: list[tuple[str, dict]], keyword: str,
-                     days: list[date]) -> tuple[set[tuple[str, date]], list[str]]:
+def dang_ky_chu_nhat(roster: list[tuple[str, dict]], keyword: str, days: list[date],
+                     ) -> tuple[set[tuple[str, date]], set[tuple[str, date]], list[str]]:
     """Đối chiếu "Lịch trực ngày nghỉ": trả về (set (uid, Chủ nhật ĐÃ đăng ký làm),
-    danh sách cảnh báo). Chủ nhật không có trong set -> thưởng ngày đó = 0."""
+    set (uid, Chủ nhật) được CỘNG PHỤ CẤP, danh sách cảnh báo).
+    Chủ nhật không có trong set đầu -> thưởng ngày đó = 0. Phụ cấp chỉ cấp 1 lần cho
+    mỗi người trên lịch: 1 tên lịch ứng với nhiều tài khoản Pancake thì tài khoản
+    đứng đầu (theo thứ tự bảng thưởng) nhận phụ cấp, các tài khoản sau chỉ có thưởng."""
     import lich_truc
 
     sundays = [d for d in days if d.weekday() == 6]
     if not sundays:
-        return set(), []
+        return set(), set(), []
     lich = lich_truc.doc_dang_ky().get(keyword) or {"cols": set(), "reg": {}}
     reg, cols = lich["reg"], lich["cols"]
     ok: set[tuple[str, date]] = set()
+    phu_cap: set[tuple[str, date]] = set()
+    da_cap: set[tuple[str, date]] = set()       # (tên lịch, ngày) đã cấp phụ cấp
     canh_bao: list[str] = []
     for uid, info in roster:
-        ten = lich_truc.chuan_hoa_ten(info["name"])
-        # Tên trên Pancake thường = tên lịch trực + hậu tố bộ phận -> khớp theo tiền tố
-        khop = [ln for ln in reg if ten.startswith(ln) or ln.startswith(ten)]
-        if not khop:
+        ln = lich_truc.khop_ten(reg, info["name"])
+        if ln is None:
             canh_bao.append(f"'{info['name']}' không có trong lịch trực -> thưởng CN = 0")
             continue
-        ln = max(khop, key=len)
         for d in sundays:
             if (d.day, d.month) in reg[ln]:
                 ok.add((uid, d))
+                if (ln, d) not in da_cap:
+                    da_cap.add((ln, d))
+                    phu_cap.add((uid, d))
     for d in sundays:
         if (d.day, d.month) not in cols:
             canh_bao.append(f"Lịch trực CHƯA có cột ngày {d.strftime('%d/%m')} "
                             f"-> cả bộ phận 0 thưởng CN này")
-    return ok, canh_bao
+    return ok, phu_cap, canh_bao
 
 
 # ----------------------------------------------------------------------
@@ -186,8 +192,10 @@ def parse_old_bonus(old_values: list[list[str]] | None) -> dict[tuple[str, date]
         except ValueError:
             continue
     for row in old_values[2:]:
-        if len(row) < 2 or not row[1].strip() or row[1].strip() == "Tổng":
+        if len(row) < 2 or not row[1].strip():
             continue
+        if row[1].strip() == "Tổng":
+            break            # hết bảng - phía dưới là khối phụ (quy tắc / đăng kí CN)
         name = row[1].strip()
         for i, d in col_dates.items():
             if i < len(row):
@@ -233,11 +241,14 @@ def build_matrix(
     data: dict, tiers_cfg: dict, group_label: str,
     settled_days: set[date], old_bonus: dict, title_suffix: str = "",
     dang_ky_cn: set[tuple[str, date]] | None = None,
+    phu_cap_cn: set[tuple[str, date]] | None = None, phu_cap: int = 0,
 ) -> list[list]:
     """Ma trận thưởng ngày: ngày đã chốt lấy số cũ trên sheet, ngày mới tính từ data.
 
     dang_ky_cn: set (uid, ngày CN đã đăng ký làm theo Lịch trực) - Chủ nhật không
-    nằm trong set thì thưởng = 0; None = không áp quy tắc lịch trực."""
+    nằm trong set thì thưởng = 0; None = không áp quy tắc lịch trực.
+    phu_cap_cn / phu_cap: (uid, CN) được cộng phụ cấp đi làm Chủ nhật `phu_cap` đồng
+    vào ô thưởng (kể cả khi không đạt mốc thưởng nào) - xem dang_ky_chu_nhat."""
     n_day_cols = len(days)
     first_day_col = 4
     header = ["STT", "Họ và tên", "Bộ phận"] + [d.strftime("%d/%m/%Y") for d in days] + ["Tổng tháng"]
@@ -263,6 +274,8 @@ def build_matrix(
                 # CN không đăng ký làm trên Lịch trực: lẽ ra có thưởng -> ghi 0 rõ ràng,
                 # không đạt mốc nào -> để rỗng như bình thường
                 cells.append(0 if b else "")
+            elif phu_cap_cn and (uid, d) in phu_cap_cn:
+                cells.append(b + phu_cap)      # CN có đăng kí làm: thưởng + phụ cấp
             else:
                 cells.append(b if b else "")
         first_cell = f"{google_sheet._col_letter(first_day_col)}{row_num}"
@@ -419,6 +432,117 @@ def build_rules_block(only: str | None = None) -> list[list]:
         rows.append(row)
     rows.append(["Chủ nhật KHÔNG 'Đăng kí làm' trên Lịch trực ngày nghỉ "
                  "-> thưởng Chủ nhật = 0 (ô ghi số 0)"])
+    pc = " / ".join(f"{label} {config.PHU_CAP_CHU_NHAT.get(kw, 0):,}".replace(",", ".")
+                    for kw, label in groups)
+    rows.append([f"Chủ nhật CÓ 'Đăng kí làm': ô thưởng = thưởng theo mốc + phụ cấp đi làm "
+                 f"Chủ nhật ({pc}), kể cả khi không đạt mốc nào; 1 người nhận phụ cấp 1 lần"])
+    return rows
+
+
+def build_dang_ky_block(month_label: str, sundays: list[date], days: list[date],
+                        roster: list[tuple[str, dict]], values: list[list],
+                        keyword: str, group_label: str) -> list[list]:
+    """Bảng "Đăng kí làm" các CHỦ NHẬT của tháng - CHÉP từ Lịch trực ngày nghỉ.
+
+    Tab lịch trực chọn theo chữ "sale"/"cskh" trong tên tab -> ghi vào trang tính
+    của bộ phận đó, ngay DƯỚI bảng thưởng GR. Người = ĐÚNG danh sách trên lịch trực
+    (thứ tự như lịch), chỉ lấy các cột Chủ nhật thuộc tháng.
+    2 cột tên đặt CẠNH NHAU để soát: "Tên trên lịch trực" và "Tên thực tế trên bảng
+    thưởng" = tên lịch map sang tên nhân viên Pancake (cùng quy tắc khớp tiền tố
+    với lich_truc.khop_ten). 1 tên lịch ứng với nhiều tài khoản: CHỈ hiện tài khoản
+    có số ở ô Chủ nhật trên bảng thưởng (tài khoản phụ ô CN rỗng -> bỏ qua), mỗi tài
+    khoản 1 dòng trong ô; chưa tài khoản nào có số (đầu tháng) thì hiện cả để soát.
+    Không khớp ai -> ghi cảnh báo, vì khi đó người này sẽ không được tính là đã
+    đăng kí khi trừ thưởng CN.
+    Ô Chủ nhật CHỈ ghi ngày CÓ đăng kí làm (không ghi "Nghỉ" cho ngày qua hay ngày tới):
+      - ngày đã lên bảng thưởng: TÁCH RÕ dạng gọn "100k + 250k" (phụ cấp + thưởng,
+        k = nghìn đồng). Ô trên bảng thưởng (`values`, cùng thứ tự `roster`, dòng NV
+        đầu = values[2]) ĐÃ CỘNG phụ cấp 1 lần/người -> thưởng = tổng ô của (các)
+        tài khoản - phụ cấp.
+      - ngày chưa lên bảng thưởng: chữ "Đăng kí"
+      - lịch chưa có cột ngày đó: "-"
+    `days` = các ngày đang có trên bảng thưởng (để trỏ đúng cột trong `values`)."""
+    import lich_truc
+
+    lich = lich_truc.doc_dang_ky().get(keyword) or {}
+    nguoi, cols = lich.get("nguoi", []), lich.get("cols", set())
+    tabs, reg = lich.get("tabs", []), lich.get("reg", {})
+    co_cot = [(d.day, d.month) in cols for d in sundays]
+    phu_cap = config.PHU_CAP_CHU_NHAT.get(keyword, 0)
+    # (tên chuẩn hóa, tên hiển thị, chỉ số trong roster) - để map ngược từ tên lịch trực
+    ten_thuong = [(lich_truc.chuan_hoa_ten(info["name"]), info["name"], i)
+                  for i, (_uid, info) in enumerate(roster)]
+    cot_ngay = {d: 3 + j for j, d in enumerate(days)}      # chỉ số cột trong values
+    cot_cn = [cot_ngay[d] for d in sundays if d in cot_ngay]   # cột CN đã lên bảng thưởng
+
+    def tien(n: int) -> str:
+        return f"{n:,}".replace(",", ".")
+
+    def nghin(n: int) -> str:
+        """250000 -> "250k" (số lẻ nghìn hiếm gặp thì ghi đủ)."""
+        return f"{n // 1000:,}".replace(",", ".") + "k" if n % 1000 == 0 else tien(n)
+
+    nguon = (" + ".join(f'"{t}"' for t in tabs) if tabs
+             else f"không thấy tab nào có chữ '{keyword}'")
+    rows: list[list] = [
+        [f"ĐĂNG KÍ LÀM CHỦ NHẬT THÁNG {month_label} - Bộ phận {group_label} "
+         f"(chép từ tab {nguon} của trang tính \"Lịch trực ngày nghỉ - Greenvita\")"],
+        # Dấu ' ở đầu buộc Sheets lưu dạng CHỮ: "CN 06/09" viết thẳng sẽ bị hiểu là
+        # ngày tháng (số 46271) rồi mất định dạng ngày khi tô lại màu cho tab.
+        ["STT", "Tên trên lịch trực", "Tên thực tế trên bảng thưởng", "Cơ sở"]
+        + [d.strftime("'CN %d/%m") for d in sundays] + ["Số CN đăng kí"],
+    ]
+    dem_cot = [0] * len(sundays)
+    for idx, p in enumerate(nguoi, start=1):
+        ln = lich_truc.chuan_hoa_ten(p["ten"])
+        khop = [(goc, i) for chuan, goc, i in ten_thuong
+                if chuan.startswith(ln) or ln.startswith(chuan)]
+        cells: list = []
+        n_lam = 0
+        for i, d in enumerate(sundays):
+            if not co_cot[i]:
+                cells.append("-")
+                continue
+            if (d.day, d.month) not in p["ngay"]:
+                cells.append("")         # không đăng kí -> để trống (không ghi "Nghỉ")
+                continue
+            dem_cot[i] += 1
+            n_lam += 1
+            if d not in cot_ngay:
+                cells.append("Đăng kí")  # đã đăng kí, ngày chưa lên bảng thưởng
+            elif not khop:
+                cells.append("Đăng kí (không có trên bảng thưởng)")
+            else:
+                tong = sum(o for _goc, r in khop
+                           if isinstance(o := values[2 + r][cot_ngay[d]], int))
+                thuong = tong - phu_cap
+                if thuong < 0:           # bảng còn số cũ chưa cộng phụ cấp
+                    cells.append(f"{nghin(tong)} (chưa tính lại - chạy --tinh-lai)")
+                else:
+                    cells.append(f"{nghin(phu_cap)} + {nghin(thuong)}")
+        # Chỉ hiện tài khoản CÓ số ở ô Chủ nhật (tài khoản phụ ô CN rỗng -> bỏ);
+        # chưa tài khoản nào có số thì giữ cả để còn soát được tên
+        co_thuong = [(goc, r) for goc, r in khop
+                     if any(isinstance(o := values[2 + r][c], int) and o > 0 for c in cot_cn)]
+        hien = co_thuong or khop
+        ten_thuc_te = ("\n".join(goc for goc, _r in hien) if khop
+                       else "(không khớp ai trên bảng thưởng)")
+        rows.append([idx, p["ten"], ten_thuc_te, p["co_so"]] + cells + [n_lam])
+
+    rows.append(["", "Tổng người đăng kí", "", ""] + list(dem_cot) + [sum(dem_cot)])
+    thieu = [d.strftime("%d/%m") for i, d in enumerate(sundays) if not co_cot[i]]
+    rows.append([f"Ô = {nghin(phu_cap)} lương (phụ cấp đi làm Chủ nhật) + thưởng doanh số "
+                 "ngày đó, k = nghìn đồng; ô Chủ nhật trên bảng thưởng đã cộng cả hai  |  Đăng kí = đã "
+                 "đăng kí, ngày chưa lên bảng thưởng  |  trống = không đăng kí  |  - = "
+                 "lịch trực CHƯA có cột ngày này"
+                 + (f"  |  CHƯA có cột: {', '.join(thieu)}" if thieu else "")])
+    chua_co = [info["name"] for _, info in roster
+               if lich_truc.khop_ten(reg, info["name"]) is None]
+    if chua_co:
+        rows.append(["Có trên bảng thưởng nhưng CHƯA có trong lịch trực (thưởng CN = 0): "
+                     + ", ".join(chua_co)])
+    if lich_truc.duong_dan():
+        rows.append([f"Nguồn: {lich_truc.duong_dan()}"])
     return rows
 
 
@@ -432,8 +556,11 @@ def group_roster(staff: dict, keyword: str) -> list[tuple[str, dict]]:
 
 def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
               today: date, year: int, month: int, finalize: bool,
-              only_if_exists: bool = False) -> None:
-    """Cập nhật (hoặc chốt sổ) cả 3 tab của 1 tháng."""
+              only_if_exists: bool = False, recompute: bool = False) -> None:
+    """Cập nhật (hoặc chốt sổ) cả 3 tab của 1 tháng.
+
+    recompute: TÍNH LẠI mọi ngày của tháng từ API (như chốt sổ nhưng KHÔNG khóa) -
+    dùng khi đổi quy tắc thưởng/phụ cấp để áp cho cả các ngày đã lên bảng."""
     first = date(year, month, 1)
     month_end = date(year, month, calendar.monthrange(year, month)[1])
 
@@ -490,6 +617,10 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
         # Nếu tab cũ có cột ngày vượt cutoff (dữ liệu của logic cũ) -> làm lại từ đầu
         if any(d > cutoff for d in parse_header_days(old["sale"])):
             settled_days = set()
+        if recompute:
+            settled_days = set()
+            print(f"Tháng {month:02d}.{year}: TÍNH LẠI cả tháng theo quy tắc hiện hành "
+                  f"(không khóa sổ) ...")
         title_suffix = ""
 
     days = [first + timedelta(days=i) for i in range((cutoff - first).days + 1)]
@@ -525,29 +656,42 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
     da_ghi: set[str] = set()
     so_nguoi_tru_cn = 0
     sunday_idx = [3 + i for i, d in enumerate(days) if d.weekday() == 6]
+    # Khối "Đăng kí làm" liệt kê MỌI Chủ nhật của tháng (kể cả ngày chưa lên bảng
+    # thưởng) để xem trước ai đã đăng kí trực những Chủ nhật còn lại.
+    cn_thang = [first + timedelta(days=i) for i in range((month_end - first).days + 1)
+                if (first + timedelta(days=i)).weekday() == 6]
     for keyword, label in GROUPS:
         roster = group_roster(staff, keyword)
         if not roster:
             continue
         if lich_truc_loi is None:
-            dang_ky, canh_bao = dang_ky_chu_nhat(roster, keyword, days)
+            dang_ky, cap_cn, canh_bao = dang_ky_chu_nhat(roster, keyword, days)
         else:
-            dang_ky, canh_bao = None, []
+            dang_ky, cap_cn, canh_bao = None, None, []
         for cb in canh_bao:
             print(f"  [Lịch trực {label}] {cb}")
         values = build_matrix(month_label, days, roster, data,
                               config.BONUS_TIERS_BY_GROUP[keyword], label,
                               settled_days, parse_old_bonus(old[keyword]), title_suffix,
-                              dang_ky_cn=dang_ky)
+                              dang_ky_cn=dang_ky, phu_cap_cn=cap_cn,
+                              phu_cap=config.PHU_CAP_CHU_NHAT.get(keyword, 0))
         # Đếm người có ô CN = 0 (đạt mốc thưởng nhưng không đăng ký làm)
         so_nguoi_tru_cn += sum(
             1 for row in values[2:-1]
             if any(i < len(row) and row[i] == 0 for i in sunday_idx))
         end_col = google_sheet._col_letter(3 + len(days) + 1)
         sunday_cols = [3 + i for i, d in enumerate(days) if d.weekday() == 6]
+        # Bảng "Đăng kí làm" Chủ nhật ghi ngay dưới bảng thưởng (bỏ qua nếu
+        # không đọc được lịch trực - khi đó quy tắc trừ thưởng CN cũng không áp)
+        dang_ky_block = (build_dang_ky_block(month_label, cn_thang, days, roster,
+                                             values, keyword, label)
+                         if lich_truc_loi is None and cn_thang else None)
         google_sheet.write_table(tabs[keyword], values,
                                  money_range=f"D3:{end_col}{len(values)}",
                                  sunday_cols=sunday_cols, nhom=keyword,
+                                 block_rows=dang_ky_block, block_col=0,
+                                 # cột C nới rộng + xuống dòng cho cột tên map (2 cột tên cạnh nhau)
+                                 col_px={2: 250}, block_wrap_cols=[2],
                                  title_note=GHI_CHU_THUONG)
         da_ghi.add(keyword)
         total = sum(sum(v for v in row[3:-1] if isinstance(v, int)) for row in values[2:-1])
@@ -555,7 +699,17 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
     if lich_truc_loi is not None:
         print(f"  [LICH TRUC][LOI] Không đọc được Lịch trực ngày nghỉ - BỎ QUA trừ thưởng "
               f"Chủ nhật lần chạy này ({lich_truc_loi[:100]})")
-    elif sunday_idx:
+    else:
+        import lich_truc
+        mo_ta = []
+        for kw, label in GROUPS:
+            lt = lich_truc.doc_dang_ky().get(kw) or {}
+            tabs = lt.get("tabs") or []
+            mo_ta.append(f"{label}: " + (" + ".join(f"'{t}'" for t in tabs)
+                                         + f" ({len(lt.get('nguoi', []))} người)"
+                                         if tabs else f"KHÔNG thấy tab có chữ '{kw}'"))
+        print("  [LICH TRUC] Tab đã đọc - " + "; ".join(mo_ta))
+    if lich_truc_loi is None and sunday_idx:
         print(f"  [LICH TRUC][OK] Lịch trực kết nối OK - tháng {month:02d}.{year} có "
               f"{so_nguoi_tru_cn} người bị trừ thưởng Chủ nhật về 0 "
               f"(ô ghi 0 = có thưởng mà bị trừ; ô rỗng = bình thường)")
@@ -573,7 +727,7 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
         google_sheet.write_table(ds_tabs[keyword], ds_values,
                                  money_range=f"D3:{end_col}{len(ds_values)}",
                                  sunday_cols=sunday_cols,
-                                 rules_block=build_rules_block(only=keyword),
+                                 block_rows=build_rules_block(only=keyword),
                                  nhom=keyword)
         da_ghi_ds.add(keyword)
         tong_ds_ngay = sum(
@@ -641,10 +795,12 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
         print(f"  Đã đóng dấu '{LOCK_MARK}' - các tab tháng {month:02d}.{year} bị khóa vĩnh viễn.")
 
 
-def parse_args() -> tuple[int, int, bool]:
+def parse_args() -> tuple[int, int, bool, bool]:
     parser = argparse.ArgumentParser(
         description="Cập nhật 3 bảng thưởng theo logic chốt ngày (trễ 2 ngày) + chốt sổ cuối tháng")
     parser.add_argument("thang", nargs="?", help="Tháng YYYY-MM; tháng đã qua sẽ CHỐT SỔ luôn")
+    parser.add_argument("--tinh-lai", action="store_true",
+                        help="Tính lại mọi ngày của tháng theo quy tắc hiện hành (không khóa sổ)")
     args = parser.parse_args()
     tz = ZoneInfo(config.TIMEZONE)
     today = datetime.now(tz).date()
@@ -654,8 +810,8 @@ def parse_args() -> tuple[int, int, bool]:
             date(year, month, 1)
         except ValueError:
             raise SystemExit("Tháng không hợp lệ. Dùng dạng YYYY-MM, ví dụ: python thuong_thang.py 2026-08")
-        return year, month, True
-    return today.year, today.month, False
+        return year, month, True, args.tinh_lai
+    return today.year, today.month, False, args.tinh_lai
 
 
 def main() -> None:
@@ -664,7 +820,7 @@ def main() -> None:
     if not shop_id:
         raise SystemExit("Chưa có PANCAKE_SHOP_ID trong .env.")
 
-    year, month, explicit = parse_args()
+    year, month, explicit, tinh_lai = parse_args()
     tz = ZoneInfo(config.TIMEZONE)
     today = datetime.now(tz).date()
     first = date(year, month, 1)
@@ -677,7 +833,7 @@ def main() -> None:
 
     # Tháng đã qua (gọi tường minh) -> chốt sổ tháng đó
     run_month(client, shop_id, staff, tz, today, year, month,
-              finalize=explicit and today > month_end)
+              finalize=explicit and today > month_end, recompute=tinh_lai)
 
     # Chạy mặc định đầu tháng mới -> tự chốt sổ tháng trước (nếu tab tồn tại và chưa khóa)
     if not explicit:

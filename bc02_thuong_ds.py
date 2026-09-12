@@ -159,7 +159,9 @@ def read_gr_bonus_totals(month: int, year: int) -> dict[str, int]:
             continue
         for row in vals[2:]:
             name = row[i_name].strip() if i_name < len(row) else ""
-            if not name or name == "Tổng":
+            if name == "Tổng":
+                break        # hết bảng - dưới đó là khối "Đăng kí làm Chủ nhật"
+            if not name:
                 continue
             digits = row[i_tong].replace(".", "").replace(",", "").strip() if i_tong < len(row) else ""
             if digits.isdigit():

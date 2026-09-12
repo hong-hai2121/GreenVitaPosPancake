@@ -67,13 +67,31 @@ Kết quả:
 ```powershell
 python thuong_thang.py            # chạy hàng ngày: cập nhật cả 5 tab + tự chốt sổ tháng trước
 python thuong_thang.py 2026-08    # tháng đã qua: CHỐT SỔ ngay (tính lại cả tháng rồi khóa)
+python thuong_thang.py --tinh-lai # tính lại MỌI ngày của tháng hiện tại theo quy tắc hiện
+                                  # hành (không khóa) - dùng sau khi đổi mốc thưởng/phụ cấp
 ```
 
 MỘT lệnh lấy dữ liệu MỘT lần rồi cập nhật cả 5 tab trên HAI TRANG TÍNH riêng
 (`.env`: `GOOGLE_SHEET_ID` = trang tính Sale, `GOOGLE_SHEET_ID_CSKH` = trang tính CSKH):
 
 Trang tính **Sale** (không có thông tin CSKH):
-1. **Thưởng Sale GR T09.2026** - thưởng ngày bộ phận Sale
+1. **Thưởng Sale GR T09.2026** - thưởng ngày bộ phận Sale; NGAY DƯỚI bảng có khối
+   **"ĐĂNG KÍ LÀM CHỦ NHẬT"** CHÉP từ trang tính *Lịch trực ngày nghỉ - Greenvita*:
+   tab nào có chữ **sale** trong tên -> trang tính Sale, có chữ **cskh** -> trang
+   tính CSKH (nhiều tab cùng chữ thì gộp; tab không có cột "Họ Tên" bị bỏ qua).
+   Người = đúng danh sách trên lịch, cột = mọi Chủ nhật CỦA THÁNG (kể cả ngày
+   chưa lên bảng thưởng). Ô Chủ nhật CHỈ ghi ngày có đăng kí làm, TÁCH RÕ dạng
+   gọn `100k + 250k` = phụ cấp + thưởng (phụ cấp `config.PHU_CAP_CHU_NHAT`: Sale
+   100.000, CSKH 200.000); ngày chưa lên bảng thưởng -> `Đăng kí`; không đăng kí
+   -> để trống (không ghi "Nghỉ"); `-` = lịch chưa có cột ngày đó. Còn Ô CHỦ
+   NHẬT TRÊN BẢNG THƯỞNG là số ĐÃ CỘNG (thưởng theo mốc + phụ cấp, kể cả khi
+   không đạt mốc nào; 1 người nhận phụ cấp 1 lần dù có nhiều tài khoản Pancake)
+   -> Tổng tháng và cột Thưởng của BC02 đã gồm phụ cấp. Hai cột tên CẠNH NHAU
+   để soát: **Tên trên lịch trực** và **Tên thực tế trên bảng thưởng** (= tên lịch
+   map sang tên nhân viên Pancake; 1 tên lịch ứng với nhiều tài khoản thì CHỈ hiện
+   tài khoản có số ở ô Chủ nhật trên bảng thưởng, mỗi tài khoản 1 dòng trong ô -
+   chưa tài khoản nào có số thì hiện cả; không khớp ai thì cảnh báo). Dòng cuối liệt kê nhân viên
+   có trên bảng thưởng nhưng chưa có trong lịch, kèm link lịch trực
 2. **Doanh số Sale T09.2026** - ma trận DOANH SỐ ngày nhân viên Sale (cùng cấu trúc
    bảng thưởng, để đối chiếu: doanh số ô nào -> thưởng ô đó theo mốc)
 3. **Doanh số Sale Page T09.2026** - ma trận DOANH SỐ ngày theo PAGE NGUỒN:
@@ -86,7 +104,8 @@ Trang tính **Sale** (không có thông tin CSKH):
    (giữ cột % nhập tay)
 
 Trang tính **CSKH** (không có thông tin Sale):
-4. **Thưởng CSKH GR T09.2026** - thưởng ngày bộ phận CSKH
+4. **Thưởng CSKH GR T09.2026** - thưởng ngày bộ phận CSKH (cũng kèm khối
+   "ĐĂNG KÍ LÀM CHỦ NHẬT" của bộ phận CSKH)
 5. **Doanh số CSKH T09.2026** - ma trận DOANH SỐ ngày nhân viên CSKH
 6. **BC02 Thưởng DS CSKH T09.2026** - thưởng doanh số tháng bộ phận CSKH
 
@@ -158,7 +177,9 @@ python bc02_thuong_ds.py 2026-07    # tháng cụ thể
 **Cách 1 - Ứng dụng GUI (nháy đúp `app_cap_nhat.pyw`):** mở cửa sổ desktop:
 tự chạy cập nhật ngay, hiển thị tiến trình trong khung log, rồi hiện **đồng hồ
 đếm ngược tới 9h sáng hôm sau** và tự chạy tiếp. Có nút **Cập nhật ngay**,
-**Mở Google Sheet**, **Mở file log**.
+**Sheet Sale**, **Sheet CSKH**, **Mở file log**; ô *Link lịch trực CN* có nút
+**Lưu link** (ghi vào `.env`) và **Mở lịch trực** (mở trang tính lịch trực
+đang dùng trên trình duyệt).
 - Tạo icon trên Desktop (chạy 1 lần, hoặc chạy lại khi đổi máy/đổi thư mục):
   `python tao_loi_tat.py` -> vẽ `icon_app.ico` và tạo lối tắt
   **GreenVita - Cập nhật thưởng** trên Desktop (chạy bằng `pythonw`, không hiện cửa sổ đen).

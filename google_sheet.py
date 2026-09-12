@@ -247,13 +247,18 @@ def _delete_conditional_rules(ss, sheet_id: int) -> list[dict]:
 
 def _style_month_table(ss, ws, n_rows: int, n_cols: int, n_fixed_cols: int = 3,
                        sunday_cols: list[int] | None = None,
-                       extra_block: tuple[int, int, int] | None = None,
-                       title_note_start: int | None = None) -> None:
+                       extra_block: tuple[int, int, int, int] | None = None,
+                       title_note_start: int | None = None,
+                       col_px: dict[int, int] | None = None,
+                       block_wrap_cols: list[int] | None = None) -> None:
     """Tô màu bảng thưởng: title, header, sọc xen kẽ, ô đạt thưởng, tổng, khung, độ rộng cột.
 
     sunday_cols: chỉ số cột (0-based) của các ngày Chủ nhật -> tô tông cam nhận biết.
-    extra_block: (dòng bắt đầu 0-based, số dòng, số cột) của khối quy tắc thưởng phía dưới.
+    extra_block: (dòng bắt đầu, số dòng, số cột, cột bắt đầu) - đều 0-based - của
+        khối phụ ghi phía dưới bảng (quy tắc thưởng / đăng kí làm Chủ nhật).
     title_note_start: vị trí ký tự bắt đầu phần ghi chú trong ô tiêu đề -> tô đỏ từ đó.
+    col_px: {chỉ số cột 0-based: px} nới độ rộng đè lên mặc định (áp cho cả tab).
+    block_wrap_cols: các cột (0-based) của khối phụ cần XUỐNG DÒNG khi chữ dài.
     """
     sunday_cols = sunday_cols or []
     sid = ws.id
@@ -354,16 +359,22 @@ def _style_month_table(ss, ws, n_rows: int, n_cols: int, n_fixed_cols: int = 3,
             "range": {"sheetId": sid, "dimension": "COLUMNS",
                       "startIndex": c0, "endIndex": c1},
             "properties": {"pixelSize": px}, "fields": "pixelSize"}})
+    # 10b. Nới riêng một số cột (vd cột C rộng hơn cho khối "Đăng kí làm" phía dưới)
+    for c, px in (col_px or {}).items():
+        req.append({"updateDimensionProperties": {
+            "range": {"sheetId": sid, "dimension": "COLUMNS",
+                      "startIndex": c, "endIndex": c + 1},
+            "properties": {"pixelSize": px}, "fields": "pixelSize"}})
     # 11. Cố định 2 dòng đầu + 3 cột đầu
     req.append({"updateSheetProperties": {
         "properties": {"sheetId": sid,
                        "gridProperties": {"frozenRowCount": 2, "frozenColumnCount": 3}},
         "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}})
 
-    # 12. Khối QUY TẮC THƯỞNG phía dưới bảng (bắt đầu từ cột B)
+    # 12. Khối phụ phía dưới bảng (quy tắc thưởng / đăng kí làm Chủ nhật)
     if extra_block:
-        b_r0, b_n, b_w = extra_block
-        c0, c1 = 1, 1 + b_w
+        b_r0, b_n, b_w, b_c0 = extra_block
+        c0, c1 = b_c0, b_c0 + b_w
         req.append(repeat(grid(b_r0, b_r0 + 1, c0, c1),
                           {"textFormat": {"bold": True, "foregroundColor": C_TITLE_TEXT}},
                           "userEnteredFormat.textFormat"))
@@ -377,6 +388,10 @@ def _style_month_table(ss, ws, n_rows: int, n_cols: int, n_fixed_cols: int = 3,
         req.append(repeat(grid(b_r0 + 2, b_r0 + b_n, c0, c1),
                           {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
                           "userEnteredFormat.numberFormat"))
+        for c in block_wrap_cols or []:
+            req.append(repeat(grid(b_r0 + 2, b_r0 + b_n, c, c + 1),
+                              {"wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"},
+                              "userEnteredFormat(wrapStrategy,verticalAlignment)"))
         border = {"style": "SOLID", "color": C_BORDER}
         req.append({"updateBorders": {"range": grid(b_r0 + 1, b_r0 + b_n, c0, c1),
                                       "top": border, "bottom": border, "left": border,
@@ -493,20 +508,25 @@ def write_bc02_table(tab_title: str, values: list[list], nhom: str = "sale") -> 
 @_with_retry
 def write_table(tab_title: str, values: list[list], money_range: str | None = None,
                 sunday_cols: list[int] | None = None,
-                rules_block: list[list] | None = None, nhom: str = "sale",
-                title_note: str | None = None) -> str:
+                block_rows: list[list] | None = None, block_col: int = 1,
+                nhom: str = "sale", title_note: str | None = None,
+                col_px: dict[int, int] | None = None,
+                block_wrap_cols: list[int] | None = None) -> str:
     """Ghi đè toàn bộ 1 tab bằng ma trận `values` (bảng thưởng tháng) rồi tô màu.
 
     - Dòng 1: tiêu đề; dòng 2: header; dòng cuối: Tổng; 3 cột đầu cố định.
-    - rules_block: khối quy tắc thưởng ghi thêm phía dưới bảng (bắt đầu cột B).
+    - block_rows: khối phụ ghi thêm phía dưới bảng (quy tắc thưởng, đăng kí làm
+      Chủ nhật ...); block_col = cột bắt đầu 0-based (0 = cột A, 1 = cột B).
     - nhom: ghi vào trang tính của nhóm nào ("sale"/"cskh").
     - title_note: đoạn ghi chú đã nối sẵn trong ô tiêu đề -> tô ĐỎ riêng đoạn đó.
+    - col_px / block_wrap_cols: nới rộng cột / bật xuống dòng cho cột của khối phụ
+      (xem _style_month_table).
     Trả về URL của spreadsheet.
     """
     ss = _spreadsheet(nhom)
 
-    block_rows = len(rules_block) + 3 if rules_block else 0
-    n_rows = max(len(values) + block_rows + 5, 50)
+    n_block = len(block_rows) + 3 if block_rows else 0
+    n_rows = max(len(values) + n_block + 5, 50)
     n_cols = max(len(values[1]) + 2, 10)
     for ws in ss.worksheets():
         if ws.title == tab_title:
@@ -523,14 +543,15 @@ def write_table(tab_title: str, values: list[list], money_range: str | None = No
               value_input_option="USER_ENTERED")
 
     extra = None
-    if rules_block:
+    if block_rows:
         start_row = len(values) + 2                       # cách bảng 1 dòng trống
-        width = max(len(r) for r in rules_block)
-        end_b = _col_letter(1 + width)                    # bắt đầu từ cột B
-        ws.update(values=rules_block,
-                  range_name=f"B{start_row}:{end_b}{start_row + len(rules_block) - 1}",
+        width = max(len(r) for r in block_rows)
+        start_b = _col_letter(block_col + 1)
+        end_b = _col_letter(block_col + width)
+        ws.update(values=block_rows,
+                  range_name=f"{start_b}{start_row}:{end_b}{start_row + len(block_rows) - 1}",
                   value_input_option="USER_ENTERED")
-        extra = (start_row - 1, len(rules_block), width)  # 0-based cho styling
+        extra = (start_row - 1, len(block_rows), width, block_col)   # 0-based
 
     note_start = -1
     if title_note and values and values[0]:
@@ -538,5 +559,6 @@ def write_table(tab_title: str, values: list[list], money_range: str | None = No
 
     _style_month_table(ss, ws, n_rows=len(values), n_cols=len(values[1]),
                        sunday_cols=sunday_cols, extra_block=extra,
-                       title_note_start=note_start if note_start > 0 else None)
+                       title_note_start=note_start if note_start > 0 else None,
+                       col_px=col_px, block_wrap_cols=block_wrap_cols)
     return ss.url

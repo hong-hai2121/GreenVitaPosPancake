@@ -175,7 +175,7 @@ def main() -> None:
                      f"(căn cứ tính thưởng GR){suffix}")
             out = build_group_matrix(title, header, emps, kw)
             google_sheet.write_table(f"Doanh số {label} {t}", out, sunday_cols=sunday,
-                                     rules_block=build_rules_block(only=kw), nhom=kw)
+                                     block_rows=build_rules_block(only=kw), nhom=kw)
             print(f"[OK] 'Doanh số {label} {t}' ({len(out) - 3} NV).")
         google_sheet.delete_tab(tab_gop)
         print(f"[OK] Đã xóa tab gộp '{tab_gop}'.")

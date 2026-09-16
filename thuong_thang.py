@@ -800,7 +800,7 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
         values = bc02_build_table(month, year, roster, stats,
                                   bc02_parse_old_manual(old_bc02[keyword]), title_suffix,
                                   bonus_totals=bonus_totals, hoan_truoc=hoan_truoc,
-                                  group_label=label, pct_cham_cong=pct_cc)
+                                  group_label=label, pct_cham_cong=pct_cc, nhom=keyword)
         google_sheet.write_bc02_table(bc02_tabs[keyword], values, nhom=keyword,
                                       block_rows=block_cc,
                                       block_wrap_cols=cham_cong.KHOI_COT_XUONG_DONG,

@@ -16,18 +16,21 @@ như thường; tên trùng thì lấy dòng ĐẦU). Tab của tháng chọn th
 "BCC T9" / "Tháng 9") và ô THÁNG/NĂM; hai cái lệch nhau (tab "Tháng 9" của OCP quên sửa
 ô THÁNG nên dòng ngày vẫn là tháng 8) thì tin theo TÊN TAB: các cột hiểu là ngày 1..31
 của tháng đó và ghi cảnh báo. Ô ngày ghi:
-    8 / 7.5 / 4 ...  số GIỜ làm trong ngày (đủ công = 8 giờ)
+    8 / 7.5 / 4 ...  số GIỜ làm trong ngày (trên 4 giờ = đủ công, từ 4 giờ trở xuống = nửa công)
     KL   nghỉ không lương            P / P/2  nghỉ phép (có lương)
     NL   nghỉ lễ hưởng lương          CĐ       nghỉ chế độ hưởng lương
     X / M đủ công (đi muộn đủ công)   X/2, M/2 nửa công
     HV   học việc (tính như đi làm)   CN, CN/2 đi làm Chủ nhật (cả / nửa ngày)
+    KP / NKP / KGP / VKP  nghỉ KHÔNG GIẤY PHÉP (config.CHAM_CONG_MA_KHONG_PHEP)
     trống = không phải ngày làm (Chủ nhật, chưa vào làm, ngày chưa tới)
 
-QUY TẮC % THƯỞNG (config.CHAM_CONG_*):
-    - Ngày nghỉ KHÔNG LƯƠNG (KL = 1 ngày; KL/2, X/2, M/2 = nửa ngày) được cộng dồn.
-    - Ngày làm KHÔNG ĐỦ 8 giờ: số giờ thiếu cộng dồn, đủ 8 giờ = 1 ngày nghỉ không lương.
-    - Cứ đủ 2 ngày nghỉ (quy đổi) -> trừ 10% thưởng; 4 ngày -> 20% ... (không âm).
-    - Nghỉ phép (P), nghỉ lễ (NL), nghỉ chế độ (CĐ) có lương -> KHÔNG trừ.
+QUY TẮC % THƯỞNG (config.CHAM_CONG_*) - theo SỐ NGÀY NGHỈ trong tháng:
+    - Ngày nghỉ = nghỉ phép (P) + nghỉ không lương (KL) + nửa công (P/2, KL/2, X/2, M/2
+      và ô ghi số giờ <= 4 = 0,5 ngày) - giống cột "Tổng số ngày nghỉ" của HR.
+      KHÔNG tính nghỉ chế độ theo quy định (CĐ), nghỉ lễ / Tết (NL), đủ công (X, M, > 4h),
+      học việc (HV), đi làm Chủ nhật (CN, CN/2).
+    - Từ 0-2 ngày -> 100%; trên 2 ngày -> 85%; trên 3 ngày -> 60%.
+    - Có ngày nghỉ KHÔNG GIẤY PHÉP (mã KP / NKP ...) -> 60% ngay.
 Tên khớp giữa Pancake và chấm công theo tiền tố, bỏ dấu (cùng quy tắc với Lịch trực);
 khớp được ở cả 2 bảng thì lấy bảng 1, trừ khi bảng 2 khớp tên DÀI hơn (đúng người hơn).
 Không khớp ai ở cả 2 bảng (đã nghỉ, tên viết khác ...) -> giữ % cũ trên sheet / 100%.
@@ -35,7 +38,6 @@ Không khớp ai ở cả 2 bảng (đã nghỉ, tên viết khác ...) -> giữ
 from __future__ import annotations
 
 import io
-import math
 import re
 import time
 import unicodedata
@@ -60,8 +62,8 @@ CAC_BANG = (1, 2)
 
 # Khối "CHẤM CÔNG" ghi dưới bảng BC02 (build_block): header + các cột xuống dòng khi ghi sheet
 KHOI_HEADER = ["STT", "Tên trên bảng thưởng", "Tên trên chấm công", "Bảng chấm công",
-               "Bộ phận (chấm công)", "Ngày nghỉ KL", "Giờ làm thiếu",
-               "Quy đổi ngày nghỉ", "% Thưởng", "Chi tiết"]
+               "Bộ phận (chấm công)", "Nghỉ phép (P)", "Nghỉ KL", "Nửa công",
+               "Không giấy phép", "Tổng ngày nghỉ", "% Thưởng", "Chi tiết"]
 _I_BANG = KHOI_HEADER.index("Bảng chấm công")
 KHOI_COT_XUONG_DONG = [_I_BANG, KHOI_HEADER.index("Chi tiết")]
 
@@ -263,8 +265,8 @@ def doc_bang(month: int, year: int, so: int = 1) -> dict:
     """Đọc + tính bảng chấm công `so` của tháng. Trả về:
     {"so", "ten_bang", "file": tên file, "tab": tên tab, "ngay": [ngày có cột] (date),
      "canh_bao": [chuỗi] (ô THÁNG / dòng ngày chưa cập nhật, tên trùng ...),
-     "nguoi": [{"ten", "bo_phan", "kl", "thieu_gio", "ngay_quy_doi", "pct", "chi_tiet",
-               "ma_la"}] theo thứ tự trên bảng,
+     "nguoi": [{"ten", "bo_phan", "phep", "kl", "nua_cong", "khong_phep", "ngay_nghi",
+               "pct", "chi_tiet", "ma_la"}] theo thứ tự trên bảng,
      "reg": {tên chuẩn hóa: người - dòng ĐẦU nếu trùng tên}}
     Cache theo (bảng, tháng, năm) trong 1 lần chạy."""
     key = (so, month, year)
@@ -327,46 +329,85 @@ def doc_bang(month: int, year: int, so: int = 1) -> dict:
     return _cache[key]
 
 
+def tinh_pct(ngay_nghi: float, khong_phep: float = 0) -> int:
+    """% Thưởng theo TỔNG ngày nghỉ: <= mốc nào đầu tiên trong CHAM_CONG_BAC_THUONG thì lấy
+    % mốc đó; vượt mốc cuối HOẶC có ngày nghỉ không giấy phép -> CHAM_CONG_PCT_TOI_THIEU."""
+    if khong_phep > 0:
+        return config.CHAM_CONG_PCT_TOI_THIEU
+    for moc, pct in config.CHAM_CONG_BAC_THUONG:
+        if ngay_nghi <= moc + 1e-9:
+            return pct
+    return config.CHAM_CONG_PCT_TOI_THIEU
+
+
+def mo_ta_quy_tac() -> str:
+    """Câu mô tả quy tắc % Thưởng (ghi dưới khối CHẤM CÔNG) dựng từ config - đổi số là đổi chữ."""
+    bac = config.CHAM_CONG_BAC_THUONG
+    muc = [f"từ 0-{bac[0][0]:g} ngày -> {bac[0][1]}%"]
+    muc += [f"trên {bac[i - 1][0]:g} ngày -> {pct}%" for i, (_moc, pct) in enumerate(bac) if i]
+    muc.append(f"trên {bac[-1][0]:g} ngày HOẶC nghỉ không giấy phép "
+               f"({'/'.join(sorted(config.CHAM_CONG_MA_KHONG_PHEP))}) -> "
+               f"{config.CHAM_CONG_PCT_TOI_THIEU}%")
+    return (f"Quy tắc: Ngày nghỉ = nghỉ phép (P) + nghỉ không lương (KL) + nửa công "
+            f"(P/2, KL/2, X/2, M/2, ô ghi từ {config.CHAM_CONG_GIO_NUA_CONG:g} giờ trở xuống "
+            "= 0,5 ngày); KHÔNG tính nghỉ chế độ (CĐ), lễ/Tết (NL). % Thưởng: "
+            + "; ".join(muc) + ".")
+
+
 def _tinh_nguoi(ten: str, r: list, i_bp: int | None, cot_ngay: dict[int, date]) -> dict:
-    gio_chuan = config.CHAM_CONG_GIO_CHUAN
-    kl = 0.0
-    thieu_gio = 0.0
+    """Đếm ngày nghỉ của 1 người trong tháng: nghỉ phép (P), không lương (KL), nửa công (mã
+    nửa ngày hoặc ô ghi số giờ <= CHAM_CONG_GIO_NUA_CONG), không giấy phép -> % Thưởng."""
+    phep = kl = nua_cong = khong_phep = 0.0
+    ngay_phep: list[str] = []
     ngay_kl: list[str] = []
-    ngay_thieu: list[str] = []
+    ngay_nua: list[str] = []
+    ngay_kp: list[str] = []
     ma_la: list[str] = []
     for j, d in sorted(cot_ngay.items()):
         v = r[j] if j < len(r) else None
         if v is None or (isinstance(v, str) and not v.strip()):
             continue
+        dm = d.strftime("%d/%m")
         n = _so(v)
         if n is not None:
-            if 0 <= n < gio_chuan:
-                thieu_gio += gio_chuan - n
-                ngay_thieu.append(f"{d.strftime('%d/%m')} ({n:g}h)")
+            if n <= config.CHAM_CONG_GIO_NUA_CONG:
+                nua_cong += 0.5
+                ngay_nua.append(f"{dm} ({n:g}h)")
             continue
         ma = _ma(v)
-        if ma in config.CHAM_CONG_MA_KHONG_LUONG:
-            so_ngay = config.CHAM_CONG_MA_KHONG_LUONG[ma]
-            kl += so_ngay
-            ngay_kl.append(d.strftime("%d/%m") + ("" if so_ngay == 1 else f" ({ma})"))
-        elif ma in config.CHAM_CONG_MA_CO_LUONG:
+        if ma in config.CHAM_CONG_MA_KHONG_PHEP:
+            khong_phep += 1
+            ngay_kp.append(f"{dm} ({ma})")
+        elif ma in config.CHAM_CONG_MA_PHEP:
+            phep += config.CHAM_CONG_MA_PHEP[ma]
+            ngay_phep.append(dm + ("" if ma == "P" else f" ({ma})"))
+        elif ma in config.CHAM_CONG_MA_KHONG_LUONG:
+            kl += config.CHAM_CONG_MA_KHONG_LUONG[ma]
+            ngay_kl.append(dm + ("" if ma == "KL" else f" ({ma})"))
+        elif ma in config.CHAM_CONG_MA_NUA_CONG:
+            nua_cong += 0.5
+            ngay_nua.append(f"{dm} ({ma})")
+        elif ma in config.CHAM_CONG_MA_KHONG_TINH:
             continue
         else:
-            ma_la.append(f"{d.strftime('%d/%m')}: '{str(v).strip()}'")
-    ngay_quy_doi = kl + thieu_gio / gio_chuan
-    bac = math.floor(ngay_quy_doi / config.CHAM_CONG_NGAY_NGHI_MOI_BAC + 1e-9)
-    pct = max(0, 100 - bac * config.CHAM_CONG_TRU_MOI_BAC)
+            ma_la.append(f"{dm}: '{str(v).strip()}'")
+    ngay_nghi = phep + kl + nua_cong + khong_phep
     chi_tiet = []
+    if ngay_kp:
+        chi_tiet.append("KHÔNG GIẤY PHÉP: " + ", ".join(ngay_kp))
+    if ngay_phep:
+        chi_tiet.append("P: " + ", ".join(ngay_phep))
     if ngay_kl:
         chi_tiet.append("KL: " + ", ".join(ngay_kl))
-    if ngay_thieu:
-        chi_tiet.append("thiếu giờ: " + ", ".join(ngay_thieu))
+    if ngay_nua:
+        chi_tiet.append("nửa công: " + ", ".join(ngay_nua))
     if ma_la:
         chi_tiet.append("mã lạ bỏ qua: " + ", ".join(ma_la))
     return {"ten": ten,
             "bo_phan": " ".join(str(r[i_bp]).split()) if i_bp is not None and i_bp < len(r) and r[i_bp] else "",
-            "kl": kl, "thieu_gio": thieu_gio, "ngay_quy_doi": ngay_quy_doi,
-            "pct": pct, "chi_tiet": " | ".join(chi_tiet), "ma_la": ma_la}
+            "phep": phep, "kl": kl, "nua_cong": nua_cong, "khong_phep": khong_phep,
+            "ngay_nghi": ngay_nghi, "pct": tinh_pct(ngay_nghi, khong_phep),
+            "chi_tiet": " | ".join(chi_tiet), "ma_la": ma_la}
 
 
 # ----------------------------------------------------------------------
@@ -447,11 +488,14 @@ def pct_theo_roster(roster: list[tuple[str, dict]], month: int, year: int,
         tim = _tim(cac_bang, info["name"])
         if tim is None:
             khong_khop.append(info["name"])
-            rows.append([idx, info["name"], khong_co, "", "", "", "", "", "'giữ % cũ", ""])
+            row: list = [""] * len(KHOI_HEADER)
+            row[0], row[1], row[2] = idx, info["name"], khong_co
+            row[KHOI_HEADER.index("% Thưởng")] = "'giữ % cũ"
+            rows.append(row)
             continue
         bang, p = tim
         rows.append([idx, info["name"], p["ten"], bang["ten_bang"], p["bo_phan"],
-                     round(p["kl"], 2), round(p["thieu_gio"], 2), round(p["ngay_quy_doi"], 3),
+                     p["phep"], p["kl"], p["nua_cong"], p["khong_phep"], p["ngay_nghi"],
                      f"'{p['pct']}%", p["chi_tiet"]])
     if khong_khop:
         canh_bao.append("Không có trên chấm công"
@@ -486,13 +530,8 @@ def build_block(month: int, year: int, group_label: str, rows: list[list],
         list(KHOI_HEADER),
     ]
     out += rows
-    bac, tru, gio = (config.CHAM_CONG_NGAY_NGHI_MOI_BAC, config.CHAM_CONG_TRU_MOI_BAC,
-                     config.CHAM_CONG_GIO_CHUAN)
-    out.append([f"Quy tắc: Quy đổi ngày nghỉ = ngày nghỉ KL + giờ làm thiếu / {gio} "
-                f"(ngày làm dưới {gio}h thì số giờ thiếu cộng dồn, đủ {gio}h = 1 ngày nghỉ "
-                f"không lương). Cứ đủ {bac} ngày -> trừ {tru}% thưởng. "
-                "Nghỉ phép (P), nghỉ lễ (NL), nghỉ chế độ (CĐ) có lương -> không trừ. "
-                f"Cột \"Bảng chấm công\" = bảng đã lấy số liệu ({ten_bang(1)} = bảng 1, "
+    out.append([mo_ta_quy_tac()
+                + f" Cột \"Bảng chấm công\" = bảng đã lấy số liệu ({ten_bang(1)} = bảng 1, "
                 f"{ten_bang(2)} = bảng 2). Không có trên cả 2 bảng -> giữ % đang có trên sheet, "
                 "DÒNG TÔ VÀNG (cả trên bảng BC02) - kiểm tra lại tên trên Pancake / chấm công."])
     for b in kq["bang"]:

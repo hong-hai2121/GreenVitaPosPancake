@@ -171,10 +171,16 @@ python bc02_thuong_ds.py 2026-07    # tháng cụ thể
 - Cột **Đơn hoàn tháng trước**: TẠM THỜI để 0 theo yêu cầu (code tính thật đã có sẵn -
   hàm `dem_hoan_thang_truoc` đọc `status_history`, khi cần bật lại chỉ 1 dòng)
 - **Tỷ lệ hoàn** = (hoàn tháng này + hoàn tháng trước) / đơn chốt
+- Cột **Trừ tiền đơn hoàn** (`config.TRU_DON_HOAN_*`, CHỈ tab CSKH - tab Sale không có
+  cột này): đơn hoàn
+  vượt quá **3%** số đơn chốt thì mỗi đơn vượt trừ **50.000đ** - số đơn hoàn tối đa =
+  INT(đơn chốt x 3%), vd 100 đơn chốt -> tối đa 3 đơn hoàn, hoàn 5 đơn -> vượt 2 -> trừ
+  100.000đ (công thức trên sheet, sửa tay số đơn thì tự tính lại)
 - Cột **Thưởng** = cột "Tổng tháng" trên 2 tab Thưởng Sale/CSKH GR, tự mang qua
   khớp theo tên nhân viên
-- Cột công thức trên sheet: Tỷ lệ hoàn = hoàn/(chốt+hoàn); Thực nhận = Thưởng x % Thưởng
-  (% trống hiểu là 100%). Công thức dùng dấu `;` vì sheet locale Việt Nam
+- Cột công thức trên sheet: Tỷ lệ hoàn, Trừ tiền đơn hoàn (CSKH), Thực nhận = Thưởng x
+  % Thưởng - Trừ tiền đơn hoàn (% trống hiểu là 100%). Công thức dùng dấu `;` vì sheet
+  locale Việt Nam
 - Cột **% Thưởng** (bộ phận trong `config.CHAM_CONG_AP_DUNG_NHOM`, mặc định cả Sale và CSKH):
   TỰ TÍNH từ **2 bảng CHẤM CÔNG** - xem `cham_cong.py`:
   - **Bảng 1 "CHẤM CÔNG NT/TK"** (file Excel trên Drive, `GOOGLE_SHEET_ID_CHAM_CONG`,
@@ -185,13 +191,14 @@ python bc02_thuong_ds.py 2026-07    # tháng cụ thể
   - Tab của tháng chọn theo tên tab + ô THÁNG/NĂM trên header; lệch nhau (tab "Tháng 9"
     của OCP quên sửa ô THÁNG nên dòng ngày vẫn là tháng 8) thì tin theo tên tab, các cột
     hiểu là ngày 1..31 của tháng đó và ghi dòng "Lưu ý" dưới khối chấm công.
-  - Ô ngày ghi số = số giờ làm (đủ công 8h); `KL` nghỉ không lương; `P`/`NL`/`CĐ`
-    nghỉ phép / lễ / chế độ có lương, `HV` học việc, `CN`/`CN/2` đi làm Chủ nhật
-    (không trừ); trống = không phải ngày làm.
-  - **Quy đổi ngày nghỉ** = số ngày `KL` + (tổng giờ làm thiếu so với 8h) / 8
-    (làm không đủ 8h thì giờ thiếu cộng dồn, đủ 8h = 1 ngày nghỉ không lương).
-  - Cứ đủ **2 ngày** quy đổi -> **trừ 10%** (4 ngày -> 20% ...), số trong
-    `config.CHAM_CONG_*`. Tên khớp theo tiền tố bỏ dấu (như Lịch trực).
+  - **Số ngày nghỉ trong tháng** = nghỉ phép `P` + nghỉ không lương `KL` + nửa công
+    (`P/2`, `KL/2`, `X/2`, `M/2` hoặc ô ghi số giờ từ 4 trở xuống = 0,5 ngày) - giống
+    cột "Tổng số ngày nghỉ" của HR. KHÔNG tính nghỉ chế độ theo quy định `CĐ`, nghỉ
+    lễ/Tết `NL`, đủ công `X`/`M`/ô trên 4h, học việc `HV`, đi làm Chủ nhật `CN`/`CN/2`;
+    trống = không phải ngày làm.
+  - **% Thưởng**: từ 0-2 ngày nghỉ -> **100%**; trên 2 ngày -> **85%**; trên 3 ngày
+    HOẶC có ngày nghỉ **không giấy phép** (mã `KP`/`NKP`/`KGP`/`VKP`) -> **60%**.
+    Mốc và mã ô đặt trong `config.CHAM_CONG_*`. Tên khớp theo tiền tố bỏ dấu (như Lịch trực).
   - Người KHÔNG có trên cả 2 bảng (đã nghỉ, tên viết khác ...) hoặc không đọc được
     bảng nào: giữ % đang có trên sheet (nhập tay được), mặc định 100%. Log ghi
     `[CHAM CONG][OK]` / `[CHAM CONG][LOI]` cho TỪNG bảng như lịch trực.
@@ -200,10 +207,13 @@ python bc02_thuong_ds.py 2026-07    # tháng cụ thể
     Pancake hoặc trên chấm công cho khớp (tài khoản không có đơn thì không tô).
   - Dưới bảng có khối **CHẤM CÔNG THÁNG ...**: mỗi tài khoản Pancake 1 dòng - tên
     trên chấm công, cột **Bảng chấm công** ("CHẤM CÔNG NT/TK" hoặc "Chấm công OCP" =
-    bảng đã lấy số liệu), ngày KL, giờ thiếu, quy đổi, % và chi tiết ngày để soát. Khối
+    bảng đã lấy số liệu), ngày phép, KL, nửa công, không giấy phép, tổng ngày nghỉ, %
+    và chi tiết ngày để soát. Khối
     CHỈ liệt kê tài khoản có Đơn chốt > 0 hoặc có doanh số trong tháng; ai cả hai
     = 0 (đã nghỉ, chưa có đơn) thì bỏ ra ngoài khối (tiêu đề khối ghi số bị bỏ qua).
-- **Thực nhận = Thưởng x % Thưởng**
+- **Thực nhận = Thưởng x % Thưởng - Trừ tiền đơn hoàn** (khoản trừ chỉ có ở CSKH; Thưởng
+  trống mà vẫn bị trừ thì ra số âm = khoản phải trừ tiếp vào lương). Sale: Thực nhận =
+  Thưởng x % Thưởng
 
 ## Ứng dụng desktop + lịch chạy tự động (9h sáng hằng ngày, 11h mùng 2 chốt sổ)
 

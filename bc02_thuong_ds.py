@@ -9,8 +9,8 @@ Mỗi bộ phận 1 tab ở TRANG TÍNH RIÊNG của bộ phận đó (.env: GOO
 GOOGLE_SHEET_ID_CSKH = CSKH): "BC02 Thưởng DS Sale T09.2026" / "BC02 Thưởng DS CSKH T09.2026".
 
 Cấu trúc tab (mỗi tháng 1 tab):
-    STT | Tên | Bộ phận | Đơn chốt | Đơn hoàn tháng này | DS bán hàng
-        | Tỷ lệ hoàn | Thưởng | % Thưởng | Thực nhận
+    STT | Tên | Bộ phận | Đơn chốt | Đơn hoàn tháng này | Đơn hoàn tháng trước | DS bán hàng
+        | Tỷ lệ hoàn | Thưởng | % Thưởng | Trừ tiền đơn hoàn (chỉ tab CSKH) | Thực nhận
     - Dòng Tổng nằm NGAY DƯỚI header (giống mẫu), nhân viên từ dòng 4
     - Gồm nhân viên các bộ phận có chữ "sale" (tab Sale) / "cskh" (tab CSKH)
 
@@ -19,13 +19,18 @@ Nguồn số liệu:
       (DS bán hàng = DOANH SỐ = tổng tiền đơn chốt + đơn hoàn)
     - Tỷ lệ hoàn = Đơn hoàn / (Đơn chốt + Đơn hoàn)  (công thức trên sheet)
     - Thưởng: cột "Tổng tháng" của tab Thưởng GR (khớp theo tên)
-    - % Thưởng: TỰ TÍNH từ 2 bảng CHẤM CÔNG tháng (cham_cong.py: nghỉ không lương +
-      giờ làm thiếu, cứ 2 ngày trừ 10%) cho các bộ phận trong config.CHAM_CONG_AP_DUNG_NHOM:
+    - % Thưởng: TỰ TÍNH từ 2 bảng CHẤM CÔNG tháng (cham_cong.py: theo SỐ NGÀY NGHỈ - phép,
+      không lương, nửa công; 0-2 ngày 100%, trên 2 ngày 85%, trên 3 ngày hoặc nghỉ không
+      giấy phép 60%) cho các bộ phận trong config.CHAM_CONG_AP_DUNG_NHOM:
       tìm tên ở bảng 1 "CHẤM CÔNG NT/TK" trước, không có mới sang bảng 2 "Chấm công OCP"
       (cùng cách tính); không có ở cả 2 / không đọc được bảng nào -> giữ % đang có trên
       sheet (nhập tay được), mặc định 100%. Khối "CHẤM CÔNG" dưới bảng để soát, có cột
       "Bảng chấm công" ghi tên bảng đã lấy số liệu.
-      Thực nhận = Thưởng x % Thưởng (công thức, % trống = 100%)
+    - Trừ tiền đơn hoàn - CHỈ bộ phận CSKH (config.TRU_DON_HOAN_*): đơn hoàn vượt quá 3%
+      số đơn chốt thì mỗi đơn vượt trừ 50.000đ (công thức: MAX(0; hoàn - INT(chốt x 3%))
+      x 50.000). Tab Sale KHÔNG có cột này.
+    - Thực nhận = Thưởng x % Thưởng - Trừ tiền đơn hoàn (công thức, % trống = 100%;
+      Sale không có khoản trừ)
 """
 import argparse
 import calendar
@@ -44,7 +49,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 HEADER = ["STT", "Tên", "Bộ phận", "Đơn chốt", "Đơn hoàn tháng này",
           "Đơn hoàn tháng trước", "DS bán hàng", "Tỷ lệ hoàn",
-          "Thưởng", "% Thưởng", "Thực nhận"]
+          "Thưởng", "% Thưởng", "Trừ tiền đơn hoàn", "Thực nhận"]
 GROUP_KEYWORDS = ("sale", "cskh")
 
 
@@ -182,26 +187,44 @@ def build_table(month: int, year: int, roster: list[tuple[str, dict]],
                 bonus_totals: dict[str, int] | None = None,
                 hoan_truoc: dict[str, int] | None = None,
                 group_label: str = "SALE - CSKH",
-                pct_cham_cong: dict[str, str] | None = None) -> list[list]:
-    """pct_cham_cong: {tên Pancake: "90%"} tính từ chấm công - ưu tiên hơn % cũ trên sheet."""
+                pct_cham_cong: dict[str, str] | None = None,
+                nhom: str | None = None) -> list[list]:
+    """pct_cham_cong: {tên Pancake: "90%"} tính từ chấm công - ưu tiên hơn % cũ trên sheet.
+    nhom: "sale"/"cskh" (mặc định suy từ group_label) - CHỈ nhóm trong
+    config.TRU_DON_HOAN_AP_DUNG_NHOM (CSKH) mới có cột "Trừ tiền đơn hoàn" (12 cột, Thực
+    nhận = Thưởng x % - Trừ); nhóm khác (Sale) tab 11 cột, Thực nhận = Thưởng x %."""
     n = len(roster)
     first_data_row, last_data_row = 4, 3 + n     # dòng sheet (1-based)
+    tru_hoan = (nhom or group_label).lower() in config.TRU_DON_HOAN_AP_DUNG_NHOM
+    nguong = str(config.TRU_DON_HOAN_NGUONG_PCT).replace(".", ",")   # locale VN: thập phân là ,
+    tien = config.TRU_DON_HOAN_TIEN_MOI_DON
+    header = list(HEADER)
+    i_tru = HEADER.index("Trừ tiền đơn hoàn")
+    if tru_hoan:
+        header[i_tru] = (f"Trừ tiền đơn hoàn\n(hoàn > {nguong}% đơn chốt: "
+                         f"{f'{tien:,}'.replace(',', '.')}đ/đơn vượt)")
+    else:
+        del header[i_tru]
+    c_tn = "L" if tru_hoan else "K"              # cột Thực nhận
 
+    # Dòng Tổng (dòng 3) - công thức SUM để tự cập nhật khi sửa tay
+    # Công thức dùng dấu ; (locale Việt Nam dùng , làm dấu thập phân)
+    # Tỷ lệ hoàn = (hoàn tháng này + hoàn tháng trước) / đơn chốt
+    tong: list = ["", "Tổng", "",
+                  f"=SUM(D{first_data_row}:D{last_data_row})",
+                  f"=SUM(E{first_data_row}:E{last_data_row})",
+                  f"=SUM(F{first_data_row}:F{last_data_row})",
+                  f"=SUM(G{first_data_row}:G{last_data_row})",
+                  '=IF(D3=0;"";(E3+F3)/D3)',
+                  f"=SUM(I{first_data_row}:I{last_data_row})",
+                  ""]
+    if tru_hoan:
+        tong.append(f"=SUM(K{first_data_row}:K{last_data_row})")
+    tong.append(f"=SUM({c_tn}{first_data_row}:{c_tn}{last_data_row})")
     values: list[list] = [
         [f"THƯỞNG THÁNG {group_label.upper()} THÁNG {month:02d}.{year}{title_suffix}"],
-        HEADER,
-        # Dòng Tổng (dòng 3) - công thức SUM để tự cập nhật khi sửa tay
-        # Công thức dùng dấu ; (locale Việt Nam dùng , làm dấu thập phân)
-        # Tỷ lệ hoàn = (hoàn tháng này + hoàn tháng trước) / đơn chốt
-        ["", "Tổng", "",
-         f"=SUM(D{first_data_row}:D{last_data_row})",
-         f"=SUM(E{first_data_row}:E{last_data_row})",
-         f"=SUM(F{first_data_row}:F{last_data_row})",
-         f"=SUM(G{first_data_row}:G{last_data_row})",
-         '=IF(D3=0;"";(E3+F3)/D3)',
-         f"=SUM(I{first_data_row}:I{last_data_row})",
-         "",
-         f"=SUM(K{first_data_row}:K{last_data_row})"],
+        header,
+        tong,
     ]
     bonus_totals = bonus_totals or {}
     hoan_truoc = hoan_truoc or {}
@@ -214,13 +237,22 @@ def build_table(month: int, year: int, roster: list[tuple[str, dict]],
         thuong = bonus_totals.get(info["name"], "") or ""
         _, pct = old_manual.get(info["name"], ("", ""))
         pct = pct_cham_cong.get(info["name"]) or pct or "100%"
-        values.append([
+        row: list = [
             idx, info["name"], info["dept"],
             s["chot"], s["hoan"], hoan_truoc.get(uid, 0), s["ds"],
             f'=IF(D{r}=0;"";(E{r}+F{r})/D{r})',
             thuong, pct,
-            f'=IF(I{r}="";"";I{r}*IF(J{r}="";1;J{r}))',
-        ])
+        ]
+        if tru_hoan:
+            # Trừ tiền đơn hoàn: đơn hoàn vượt INT(đơn chốt x ngưỡng %) -> mỗi đơn vượt trừ `tien`
+            row.append(f"=MAX(0;E{r}+F{r}-INT(D{r}*{nguong}/100))*{tien}")
+            # Thực nhận = Thưởng x % Thưởng - Trừ tiền đơn hoàn (% trống = 100%). Thưởng trống
+            # và không bị trừ -> để trống; chỉ bị trừ -> số âm = phải trừ tiếp vào lương
+            row.append(f'=IF(AND(I{r}="";K{r}=0);"";IF(I{r}="";0;I{r})*IF(J{r}="";1;J{r})-K{r})')
+        else:
+            # Thực nhận = Thưởng x % Thưởng (% trống = 100%)
+            row.append(f'=IF(I{r}="";"";I{r}*IF(J{r}="";1;J{r}))')
+        values.append(row)
     return values
 
 
@@ -369,7 +401,7 @@ def main() -> None:
                                                  cham_cong_loi, stats=stats)
         values = build_table(month, year, roster, stats, old_manual,
                              bonus_totals=bonus_totals, hoan_truoc=hoan_truoc,
-                             group_label=label, pct_cham_cong=pct_cc)
+                             group_label=label, pct_cham_cong=pct_cc, nhom=kw)
         url = google_sheet.write_bc02_table(tab_title, values, nhom=kw, block_rows=block_cc,
                                             block_wrap_cols=cham_cong.KHOI_COT_XUONG_DONG,
                                             to_vang_ten=vang_cc)

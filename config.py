@@ -53,17 +53,26 @@ GOOGLE_SHEET_ID_CHAM_CONG_2 = os.getenv(
 # Tên gọi 2 bảng chấm công - ghi ở cột "Bảng chấm công" của khối CHẤM CÔNG dưới bảng BC02
 # để biết % Thưởng của nhân viên lấy từ bảng nào (1 = file NT/TK, 2 = Chấm công OCP)
 CHAM_CONG_TEN_BANG = {1: "CHẤM CÔNG NT/TK", 2: "Chấm công OCP"}
-# % THƯỞNG trên BC02 tính từ bảng chấm công (tab của tháng, xem cham_cong.py):
-#   quy đổi ngày nghỉ = ngày nghỉ KHÔNG LƯƠNG + (giờ làm thiếu so với 8h) / 8
-#   cứ đủ CHAM_CONG_NGAY_NGHI_MOI_BAC ngày -> trừ CHAM_CONG_TRU_MOI_BAC % (không âm)
-CHAM_CONG_GIO_CHUAN = 8               # 1 ngày công = 8 giờ; ô ghi < 8 là làm thiếu giờ
-CHAM_CONG_NGAY_NGHI_MOI_BAC = 2       # nghỉ đủ 2 ngày ...
-CHAM_CONG_TRU_MOI_BAC = 10            # ... trừ 10% thưởng (4 ngày -> 20%, ...)
-# Mã ô -> số ngày nghỉ KHÔNG LƯƠNG (so sau khi bỏ dấu, viết HOA, bỏ khoảng trắng)
-CHAM_CONG_MA_KHONG_LUONG = {"KL": 1.0, "KL/2": 0.5, "X/2": 0.5, "M/2": 0.5}
-# Mã CÓ LƯƠNG / đủ công -> không trừ (P phép, NL nghỉ lễ, CĐ nghỉ chế độ, X/M đủ công,
-# HV học việc, CN / CN/2 đi làm Chủ nhật cả / nửa ngày - bảng OCP hay ghi)
-CHAM_CONG_MA_CO_LUONG = {"P", "P/2", "NL", "CD", "X", "M", "HV", "CN", "CN/2"}
+# % THƯỞNG trên BC02 tính từ bảng chấm công theo SỐ NGÀY NGHỈ trong tháng (xem cham_cong.py):
+#   Ngày nghỉ = nghỉ phép (P) + nghỉ không lương (KL) + nửa công (giống cột "Tổng số ngày
+#   nghỉ" của HR); KHÔNG tính nghỉ chế độ theo quy định (CĐ), nghỉ lễ / Tết (NL).
+#   Từ 0-2 ngày -> 100%; trên 2 ngày -> 85%; trên 3 ngày HOẶC nghỉ không giấy phép -> 60%.
+# Bậc theo TỔNG ngày nghỉ: (mốc tối đa, %) - xét lần lượt, <= mốc nào đầu tiên thì lấy % đó
+CHAM_CONG_BAC_THUONG = [(2, 100), (3, 85)]
+# Vượt mốc cuối (> 3 ngày) HOẶC có ngày nghỉ KHÔNG GIẤY PHÉP -> % này
+CHAM_CONG_PCT_TOI_THIEU = 60
+# Mã ô -> số ngày nghỉ (so sau khi bỏ dấu, viết HOA, bỏ khoảng trắng):
+CHAM_CONG_MA_PHEP = {"P": 1.0, "P/2": 0.5}             # nghỉ phép (có lương) - VẪN tính ngày nghỉ
+CHAM_CONG_MA_KHONG_LUONG = {"KL": 1.0, "KL/2": 0.5}    # nghỉ không lương (có xin phép)
+CHAM_CONG_MA_NUA_CONG = {"X/2", "M/2"}                  # làm nửa ngày = 0,5 ngày nghỉ
+# Ô ghi SỐ GIỜ: trên CHAM_CONG_GIO_NUA_CONG giờ = đủ công (không tính nghỉ);
+# từ 4 giờ trở xuống (kể cả 0) = nửa công = 0,5 ngày nghỉ (cùng cách HR đếm "Nửa công")
+CHAM_CONG_GIO_NUA_CONG = 4
+# Mã nghỉ KHÔNG GIẤY PHÉP -> thẳng CHAM_CONG_PCT_TOI_THIEU (HR dùng mã nào thì thêm vào đây)
+CHAM_CONG_MA_KHONG_PHEP = {"KP", "NKP", "KGP", "VKP"}
+# Mã KHÔNG tính ngày nghỉ: NL lễ/Tết, CĐ nghỉ chế độ theo quy định, X/M đủ công (đi muộn đủ
+# công), HV học việc, CN / CN/2 đi làm Chủ nhật cả / nửa ngày (bảng OCP hay ghi)
+CHAM_CONG_MA_KHONG_TINH = {"NL", "CD", "X", "M", "HV", "CN", "CN/2"}
 # Bộ phận áp dụng (tab BC02 của nhóm nào lấy % từ chấm công): cả Sale lẫn CSKH
 CHAM_CONG_AP_DUNG_NHOM = {"sale", "cskh"}
 # Email được chia sẻ quyền chỉnh sửa khi tự tạo sheet mới
@@ -130,6 +139,17 @@ BONUS_TIERS_BY_GROUP = {
 # "<phụ cấp> lương + <thưởng> thưởng" để soát. Đổi số ở đây xong chạy:
 #     python thuong_thang.py --tinh-lai      (áp lại cho các ngày đã lên bảng)
 PHU_CAP_CHU_NHAT = {"sale": 100_000, "cskh": 200_000}
+
+# TRỪ TIỀN ĐƠN HOÀN (cột "Trừ tiền đơn hoàn" trên BC02, công thức trên sheet): đơn hoàn
+# (tháng này + tháng trước) vượt quá TRU_DON_HOAN_NGUONG_PCT % số đơn chốt thì mỗi đơn vượt
+# trừ TRU_DON_HOAN_TIEN_MOI_DON. Số đơn hoàn tối đa = INT(đơn chốt x 3%): 100 đơn chốt ->
+# tối đa 3 đơn hoàn, hoàn 5 đơn -> vượt 2 -> trừ 100.000đ.
+# Thực nhận trên BC02 = Thưởng x % Thưởng - Trừ tiền đơn hoàn.
+TRU_DON_HOAN_NGUONG_PCT = 3
+TRU_DON_HOAN_TIEN_MOI_DON = 50_000
+# Bộ phận áp dụng: CHỈ CSKH (Resale) - KHÔNG áp cho Sale. Tab của nhóm không có ở đây
+# không có cột Trừ tiền đơn hoàn, Thực nhận = Thưởng x % Thưởng
+TRU_DON_HOAN_AP_DUNG_NHOM = {"cskh"}
 
 # Ý nghĩa mã trạng thái đơn hàng của Pancake POS
 ORDER_STATUS = {

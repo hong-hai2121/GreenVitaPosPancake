@@ -496,7 +496,7 @@ def _style_bc02(ss, ws, n_rows: int, n_cols: int,
                           {"numberFormat": {"type": "PERCENT", "pattern": "0.0%"}},
                           "userEnteredFormat.numberFormat"))
     # Cột % Thưởng để màu bình thường (vẫn chỉnh tay được, script giữ giá trị đã chỉnh)
-    # Cột Thực nhận (J=9): vàng đậm hơn + in đậm
+    # Cột cuối (Thực nhận): vàng đậm hơn + in đậm
     req.append(repeat(grid(total_r, n_rows, n_cols - 1, n_cols),
                       {"backgroundColor": C_TOTALCOL_BG, "textFormat": {"bold": True}},
                       "userEnteredFormat(backgroundColor,textFormat.bold)"))
@@ -506,8 +506,12 @@ def _style_bc02(ss, ws, n_rows: int, n_cols: int,
                                   "right": border, "innerHorizontal": border,
                                   "innerVertical": border}})
     widths = [(0, 1, 40), (1, 2, 230), (2, 3, 110), (3, 4, 90), (4, 5, 105),
-              (5, 6, 105), (6, 7, 135), (7, 8, 90), (8, 9, 115), (9, 10, 90),
-              (10, 11, 125)]
+              (5, 6, 105), (6, 7, 135), (7, 8, 90), (8, 9, 115), (9, 10, 90)]
+    if n_cols >= 12:                              # có cột K = Trừ tiền đơn hoàn (tab CSKH)
+        widths.append((10, 11, 150))
+    widths.append((n_cols - 1, n_cols, 125))      # cột cuối = Thực nhận
+    if extra_block:                               # khối chấm công rộng hơn bảng -> cột thừa
+        widths += [(c, c + 1, 125) for c in range(n_cols, extra_block[3] + extra_block[2])]
     for c0, c1, px in widths:
         req.append({"updateDimensionProperties": {
             "range": {"sheetId": sid, "dimension": "COLUMNS",

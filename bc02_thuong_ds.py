@@ -18,8 +18,14 @@ Nguồn số liệu:
     - Đơn chốt / Đơn hoàn / DS bán hàng: tính từ đơn hàng của tháng trên Pancake
       (DS bán hàng = DOANH SỐ = tổng tiền đơn chốt + đơn hoàn)
     - Tỷ lệ hoàn = Đơn hoàn / (Đơn chốt + Đơn hoàn)  (công thức trên sheet)
-    - Thưởng, % Thưởng: NHẬP TAY trên sheet (ô nền vàng) - chạy lại script vẫn
-      GIỮ NGUYÊN số đã nhập; Thực nhận = Thưởng x % Thưởng (công thức, % trống = 100%)
+    - Thưởng: cột "Tổng tháng" của tab Thưởng GR (khớp theo tên)
+    - % Thưởng: TỰ TÍNH từ 2 bảng CHẤM CÔNG tháng (cham_cong.py: nghỉ không lương +
+      giờ làm thiếu, cứ 2 ngày trừ 10%) cho các bộ phận trong config.CHAM_CONG_AP_DUNG_NHOM:
+      tìm tên ở bảng 1 "CHẤM CÔNG NT/TK" trước, không có mới sang bảng 2 "Chấm công OCP"
+      (cùng cách tính); không có ở cả 2 / không đọc được bảng nào -> giữ % đang có trên
+      sheet (nhập tay được), mặc định 100%. Khối "CHẤM CÔNG" dưới bảng để soát, có cột
+      "Bảng chấm công" ghi tên bảng đã lấy số liệu.
+      Thực nhận = Thưởng x % Thưởng (công thức, % trống = 100%)
 """
 import argparse
 import calendar
@@ -27,6 +33,7 @@ import sys
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+import cham_cong
 import config
 import google_sheet
 from doanh_thu import load_staff, roster_sort_key, seller_of, vnd
@@ -126,10 +133,10 @@ def parse_old_manual(old_values: list[list[str]] | None) -> dict[str, tuple]:
     except ValueError:
         return result
     for row in old_values[2:]:
-        if len(row) <= max(i_th, i_pct):
-            continue
-        name = row[i_name].strip()
-        if not name or name == "Tổng":
+        name = row[i_name].strip() if i_name < len(row) else ""
+        if not name:
+            break        # hết bảng (dòng trống) - dưới đó là khối "CHẤM CÔNG" (cũng có cột tên)
+        if name == "Tổng" or len(row) <= max(i_th, i_pct):
             continue
         digits = row[i_th].replace(".", "").replace(",", "").strip()
         thuong = int(digits) if digits.isdigit() else ""
@@ -174,7 +181,9 @@ def build_table(month: int, year: int, roster: list[tuple[str, dict]],
                 title_suffix: str = "",
                 bonus_totals: dict[str, int] | None = None,
                 hoan_truoc: dict[str, int] | None = None,
-                group_label: str = "SALE - CSKH") -> list[list]:
+                group_label: str = "SALE - CSKH",
+                pct_cham_cong: dict[str, str] | None = None) -> list[list]:
+    """pct_cham_cong: {tên Pancake: "90%"} tính từ chấm công - ưu tiên hơn % cũ trên sheet."""
     n = len(roster)
     first_data_row, last_data_row = 4, 3 + n     # dòng sheet (1-based)
 
@@ -196,14 +205,15 @@ def build_table(month: int, year: int, roster: list[tuple[str, dict]],
     ]
     bonus_totals = bonus_totals or {}
     hoan_truoc = hoan_truoc or {}
+    pct_cham_cong = pct_cham_cong or {}
     for idx, (uid, info) in enumerate(roster, start=1):
         r = 3 + idx
         s = stats.get(uid, {"chot": 0, "hoan": 0, "ds": 0})
         # Thưởng = Tổng tháng từ tab Thưởng Sale/CSKH GR (khớp theo tên);
-        # % Thưởng mặc định 100%, chỉnh tay trên sheet thì giữ nguyên giá trị đã chỉnh
+        # % Thưởng: từ chấm công nếu có, không thì giữ giá trị đã có trên sheet, mặc định 100%
         thuong = bonus_totals.get(info["name"], "") or ""
         _, pct = old_manual.get(info["name"], ("", ""))
-        pct = pct or "100%"
+        pct = pct_cham_cong.get(info["name"]) or pct or "100%"
         values.append([
             idx, info["name"], info["dept"],
             s["chot"], s["hoan"], hoan_truoc.get(uid, 0), s["ds"],
@@ -212,6 +222,78 @@ def build_table(month: int, year: int, roster: list[tuple[str, dict]],
             f'=IF(I{r}="";"";I{r}*IF(J{r}="";1;J{r}))',
         ])
     return values
+
+
+def doc_cham_cong(month: int, year: int) -> str | None:
+    """Đọc 2 bảng chấm công của tháng 1 lần (bảng lỗi không chặn bảng kia). Trả về None
+    nếu đọc được ít nhất 1 bảng, chuỗi lỗi nếu không đọc được bảng nào (chỉ cảnh báo -
+    KHÔNG chặn cập nhật, % Thưởng khi đó giữ như cũ)."""
+    if not config.CHAM_CONG_AP_DUNG_NHOM:
+        return "không áp dụng (config.CHAM_CONG_AP_DUNG_NHOM trống)"
+    try:
+        kq = cham_cong.doc_cac_bang(month, year)
+    except Exception as e:                        # noqa: BLE001 - mọi lỗi đều chỉ cảnh báo
+        loi = f"{type(e).__name__}: {e}"
+        print(f"  [CHAM CONG][LOI] Không đọc được bảng chấm công - cột % Thưởng giữ như "
+              f"cũ lần chạy này ({loi[:160]})")
+        return loi
+    for so, loi in kq["loi"].items():
+        print(f"  [CHAM CONG][LOI] Không đọc được bảng {so} \"{cham_cong.ten_bang(so)}\" "
+              f"({loi[:160]})")
+    for bang in kq["bang"]:
+        ngay = bang["ngay"]
+        print(f"  [CHAM CONG][OK] Bảng {bang['so']} \"{bang['ten_bang']}\" kết nối OK - tab "
+              f"'{bang['tab'].strip()}' file '{bang['file']}': {len(bang['nguoi'])} người, "
+              f"ngày {ngay[0].strftime('%d/%m')} - {ngay[-1].strftime('%d/%m')}")
+        for cb in bang["canh_bao"]:
+            print(f"  [CHAM CONG] Bảng {bang['so']} \"{bang['ten_bang']}\": {cb}")
+    if not kq["bang"]:
+        print("  [CHAM CONG][LOI] Không đọc được bảng chấm công nào - cột % Thưởng giữ như "
+              "cũ lần chạy này")
+        return "không đọc được bảng chấm công nào"
+    return None
+
+
+def ap_cham_cong(kw: str, label: str, roster: list[tuple[str, dict]], month: int,
+                 year: int, cham_cong_loi: str | None,
+                 stats: dict[str, dict] | None = None,
+                 ) -> tuple[dict[str, str], list[list] | None, set[str]]:
+    """% Thưởng từ chấm công cho 1 bộ phận: ({tên: "90%"}, khối ghi dưới bảng BC02,
+    {tên KHÔNG có trên bảng chấm công nào -> tô VÀNG dòng đó trên sheet}).
+    Nhóm không áp dụng / đọc lỗi -> ({}, None, set()) = giữ nguyên cách cũ.
+    stats: {uid: {"chot", "hoan", "ds"}} của tháng - khối chấm công CHỈ liệt kê tài khoản
+    có Đơn chốt > 0 hoặc có doanh số; cả hai = 0 (đã nghỉ, chưa có đơn) thì bỏ ra ngoài
+    (không liệt kê -> cũng không tô vàng)."""
+    if cham_cong_loi is not None or kw not in config.CHAM_CONG_AP_DUNG_NHOM:
+        return {}, None, set()
+
+    def co_don(uid: str) -> bool:
+        s = (stats or {}).get(uid) or {}
+        return bool(s.get("chot") or s.get("ds"))
+
+    roster_khoi = [(uid, info) for uid, info in roster if co_don(uid)] if stats is not None else roster
+    pct_map, rows, canh_bao, khong_khop = cham_cong.pct_theo_roster(
+        roster, month, year, roster_khoi)
+    for cb in canh_bao:
+        print(f"  [Chấm công {label}] {cb}")
+    ten_khoi = {info["name"] for _uid, info in roster_khoi}
+    tru = sorted((ten, p) for ten, p in pct_map.items() if p != "100%" and ten in ten_khoi)
+    if tru:
+        print(f"  [CHAM CONG] {label}: {len(tru)} người bị trừ % thưởng - "
+              + ", ".join(f"{ten} {p}" for ten, p in tru))
+    else:
+        print(f"  [CHAM CONG] {label}: không ai bị trừ % thưởng "
+              f"({len(ten_khoi & set(pct_map))} người có đơn khớp chấm công)")
+    theo_bang = cham_cong.dem_theo_bang(rows)
+    if theo_bang:
+        print(f"  [CHAM CONG] {label}: khối chấm công lấy từ "
+              + ", ".join(f"{ten} ({n} người)" for ten, n in theo_bang))
+    so_bo_qua = len(roster) - len(roster_khoi)
+    if so_bo_qua:
+        print(f"  [CHAM CONG] {label}: khối chấm công bỏ qua {so_bo_qua} tài khoản "
+              "không có đơn chốt và không có doanh số")
+    return (pct_map, cham_cong.build_block(month, year, label, rows, so_bo_qua),
+            set(khong_khop))
 
 
 def parse_args() -> tuple[int, int]:
@@ -265,6 +347,7 @@ def main() -> None:
         print("CHÚ Ý: chưa đọc được cột Tổng tháng từ 2 tab Thưởng GR - cột Thưởng sẽ trống.")
     # Đơn hoàn tháng trước: TẠM THỜI để 0 theo yêu cầu (bật lại bằng dem_hoan_thang_truoc)
     hoan_truoc: dict[str, int] = {}
+    cham_cong_loi = doc_cham_cong(month, year)
 
     # Mỗi bộ phận 1 tab BC02 ở trang tính riêng của bộ phận đó
     for kw, label in (("sale", "Sale"), ("cskh", "CSKH")):
@@ -282,10 +365,14 @@ def main() -> None:
             ((uid, info) for uid, info in staff.items() if kw in info["dept"].lower()),
             key=roster_sort_key,
         )
+        pct_cc, block_cc, vang_cc = ap_cham_cong(kw, label, roster, month, year,
+                                                 cham_cong_loi, stats=stats)
         values = build_table(month, year, roster, stats, old_manual,
                              bonus_totals=bonus_totals, hoan_truoc=hoan_truoc,
-                             group_label=label)
-        url = google_sheet.write_bc02_table(tab_title, values, nhom=kw)
+                             group_label=label, pct_cham_cong=pct_cc)
+        url = google_sheet.write_bc02_table(tab_title, values, nhom=kw, block_rows=block_cc,
+                                            block_wrap_cols=cham_cong.KHOI_COT_XUONG_DONG,
+                                            to_vang_ten=vang_cc)
 
         tong_chot = sum(stats.get(uid, {}).get("chot", 0) for uid, _ in roster)
         tong_hoan = sum(stats.get(uid, {}).get("hoan", 0) for uid, _ in roster)
@@ -298,7 +385,9 @@ def main() -> None:
             print(f"  Đã giữ nguyên Thưởng/% Thưởng nhập tay của {len(old_manual)} nhân viên.")
         print(f"  {url}")
 
-    print("\nCột Thưởng = Tổng tháng từ 2 tab Thưởng GR; % Thưởng nhập tay; Thực nhận tự tính.")
+    print("\nCột Thưởng = Tổng tháng từ 2 tab Thưởng GR; % Thưởng từ 2 bảng chấm công "
+          "(NT/TK trước, không có tên mới sang OCP; không có thì giữ % trên sheet); "
+          "Thực nhận tự tính.")
 
 
 if __name__ == "__main__":

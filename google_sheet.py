@@ -373,35 +373,55 @@ def _style_month_table(ss, ws, n_rows: int, n_cols: int, n_fixed_cols: int = 3,
 
     # 12. Khối phụ phía dưới bảng (quy tắc thưởng / đăng kí làm Chủ nhật)
     if extra_block:
-        b_r0, b_n, b_w, b_c0 = extra_block
-        c0, c1 = b_c0, b_c0 + b_w
-        req.append(repeat(grid(b_r0, b_r0 + 1, c0, c1),
-                          {"textFormat": {"bold": True, "foregroundColor": C_TITLE_TEXT}},
-                          "userEnteredFormat.textFormat"))
-        req.append(repeat(grid(b_r0 + 1, b_r0 + 2, c0, c1),
-                          {"backgroundColor": C_HEADER_BG,
-                           "textFormat": {"bold": True, "foregroundColor": C_WHITE},
-                           "horizontalAlignment": "CENTER",
-                           "wrapStrategy": "WRAP"},
-                          "userEnteredFormat(backgroundColor,textFormat,"
-                          "horizontalAlignment,wrapStrategy)"))
-        req.append(repeat(grid(b_r0 + 2, b_r0 + b_n, c0, c1),
-                          {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
-                          "userEnteredFormat.numberFormat"))
-        for c in block_wrap_cols or []:
-            req.append(repeat(grid(b_r0 + 2, b_r0 + b_n, c, c + 1),
-                              {"wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"},
-                              "userEnteredFormat(wrapStrategy,verticalAlignment)"))
-        border = {"style": "SOLID", "color": C_BORDER}
-        req.append({"updateBorders": {"range": grid(b_r0 + 1, b_r0 + b_n, c0, c1),
-                                      "top": border, "bottom": border, "left": border,
-                                      "right": border, "innerHorizontal": border,
-                                      "innerVertical": border}})
+        req += _block_requests(sid, extra_block, block_wrap_cols)
 
     ss.batch_update({"requests": req})
 
 
+def _block_requests(sid: int, extra_block: tuple[int, int, int, int],
+                    block_wrap_cols: list[int] | None = None,
+                    number_pattern: str | None = "#,##0") -> list[dict]:
+    """Request tô khối phụ dưới bảng: dòng tiêu đề đậm, dòng header xanh, khung.
+    extra_block = (dòng bắt đầu, số dòng, số cột, cột bắt đầu) 0-based.
+    number_pattern: định dạng số cho vùng dữ liệu (None = để tự động, giữ số lẻ)."""
+    def grid(r0, r1, c0, c1):
+        return {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r1,
+                "startColumnIndex": c0, "endColumnIndex": c1}
+
+    def repeat(rng, fmt, fields):
+        return {"repeatCell": {"range": rng, "cell": {"userEnteredFormat": fmt},
+                               "fields": fields}}
+
+    b_r0, b_n, b_w, b_c0 = extra_block
+    c0, c1 = b_c0, b_c0 + b_w
+    req = [repeat(grid(b_r0, b_r0 + 1, c0, c1),
+                  {"textFormat": {"bold": True, "foregroundColor": C_TITLE_TEXT}},
+                  "userEnteredFormat.textFormat"),
+           repeat(grid(b_r0 + 1, b_r0 + 2, c0, c1),
+                  {"backgroundColor": C_HEADER_BG,
+                   "textFormat": {"bold": True, "foregroundColor": C_WHITE},
+                   "horizontalAlignment": "CENTER",
+                   "wrapStrategy": "WRAP"},
+                  "userEnteredFormat(backgroundColor,textFormat,"
+                  "horizontalAlignment,wrapStrategy)")]
+    if number_pattern:
+        req.append(repeat(grid(b_r0 + 2, b_r0 + b_n, c0, c1),
+                          {"numberFormat": {"type": "NUMBER", "pattern": number_pattern}},
+                          "userEnteredFormat.numberFormat"))
+    for c in block_wrap_cols or []:
+        req.append(repeat(grid(b_r0 + 2, b_r0 + b_n, c, c + 1),
+                          {"wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"},
+                          "userEnteredFormat(wrapStrategy,verticalAlignment)"))
+    border = {"style": "SOLID", "color": C_BORDER}
+    req.append({"updateBorders": {"range": grid(b_r0 + 1, b_r0 + b_n, c0, c1),
+                                  "top": border, "bottom": border, "left": border,
+                                  "right": border, "innerHorizontal": border,
+                                  "innerVertical": border}})
+    return req
+
+
 C_MANUAL_BG = _rgb("FFF9E0")     # ô nhập tay (Thưởng, % Thưởng) - vàng nhạt
+C_CANH_BAO_BG = _rgb("FFEB3B")   # dòng tô VÀNG báo hiệu (BC02: không có trên bảng chấm công nào)
 
 
 def _get_or_create_ws(ss, tab_title: str, n_rows: int, n_cols: int):
@@ -415,9 +435,15 @@ def _get_or_create_ws(ss, tab_title: str, n_rows: int, n_cols: int):
     return ws
 
 
-def _style_bc02(ss, ws, n_rows: int, n_cols: int) -> None:
+def _style_bc02(ss, ws, n_rows: int, n_cols: int,
+                extra_block: tuple[int, int, int, int] | None = None,
+                block_wrap_cols: list[int] | None = None,
+                to_vang: list[tuple[int, int]] | None = None) -> None:
     """Tô màu bảng BC02 (thưởng doanh số tháng): dòng Tổng ở TRÊN (dòng 3),
-    nhân viên từ dòng 4; cột Thưởng / %%Thưởng nền vàng = nhập tay."""
+    nhân viên từ dòng 4; cột Thực nhận vàng nhạt + in đậm.
+    extra_block: khối phụ dưới bảng (chấm công) - (dòng, số dòng, số cột, cột) 0-based.
+    to_vang: [(dòng 0-based, số cột tính từ cột A)] các dòng tô VÀNG báo hiệu (nhân viên
+    không có trên bảng chấm công nào) - tô SAU CÙNG để đè sọc xen kẽ / màu cột."""
     sid = ws.id
     total_r = 2                 # dòng Tổng (0-based)
     data_r0, data_r1 = 3, n_rows
@@ -430,7 +456,11 @@ def _style_bc02(ss, ws, n_rows: int, n_cols: int) -> None:
         return {"repeatCell": {"range": rng, "cell": {"userEnteredFormat": fmt},
                                "fields": fields}}
 
-    req = [repeat(grid(0, n_rows + 5, 0, n_cols + 2), {}, "userEnteredFormat")]
+    reset_rows, reset_cols = n_rows + 5, n_cols + 2
+    if extra_block:
+        reset_rows = max(reset_rows, extra_block[0] + extra_block[1] + 5)
+        reset_cols = max(reset_cols, extra_block[3] + extra_block[2] + 1)
+    req = [repeat(grid(0, reset_rows, 0, reset_cols), {}, "userEnteredFormat")]
     req += _delete_conditional_rules(ss, sid)
     req.append(repeat(grid(0, 1, 0, n_cols),
                       {"textFormat": {"bold": True, "fontSize": 13,
@@ -487,21 +517,49 @@ def _style_bc02(ss, ws, n_rows: int, n_cols: int) -> None:
         "properties": {"sheetId": sid,
                        "gridProperties": {"frozenRowCount": 2, "frozenColumnCount": 3}},
         "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}})
+    if extra_block:
+        # Khối chấm công: số ngày/giờ có số lẻ (3,5 ngày) -> để định dạng tự động
+        req += _block_requests(sid, extra_block, block_wrap_cols, number_pattern=None)
+    for r, w in to_vang or []:
+        req.append(repeat(grid(r, r + 1, 0, w), {"backgroundColor": C_CANH_BAO_BG},
+                          "userEnteredFormat.backgroundColor"))
     ss.batch_update({"requests": req})
 
 
 @_with_retry
-def write_bc02_table(tab_title: str, values: list[list], nhom: str = "sale") -> str:
+def write_bc02_table(tab_title: str, values: list[list], nhom: str = "sale",
+                     block_rows: list[list] | None = None,
+                     block_wrap_cols: list[int] | None = None,
+                     to_vang_ten: set[str] | None = None) -> str:
     """Ghi đè + tô màu tab BC02 (thưởng doanh số tháng) vào trang tính của `nhom`.
+    block_rows: khối phụ (chấm công -> % Thưởng) ghi từ cột A, cách bảng 1 dòng trống;
+    block_wrap_cols: cột (0-based) của khối cần xuống dòng;
+    to_vang_ten: tên nhân viên (cột B) cần tô VÀNG cả dòng - ở bảng chính (từ dòng 4) lẫn
+    trong khối (từ dòng thứ 3 của khối) - báo hiệu không có trên bảng chấm công nào.
     Trả về URL spreadsheet."""
     ss = _spreadsheet(nhom)
-    ws = _get_or_create_ws(ss, tab_title, max(len(values) + 5, 50),
-                           max(len(values[1]) + 2, 12))
+    n_block = len(block_rows) + 3 if block_rows else 0
+    block_w = max(len(r) for r in block_rows) if block_rows else 0
+    ws = _get_or_create_ws(ss, tab_title, max(len(values) + n_block + 5, 50),
+                           max(len(values[1]) + 2, block_w + 1, 12))
     ws.clear()
     end = _col_letter(len(values[1]))
     ws.update(values=values, range_name=f"A1:{end}{len(values)}",
               value_input_option="USER_ENTERED")
-    _style_bc02(ss, ws, n_rows=len(values), n_cols=len(values[1]))
+    extra = None
+    ten_vang = to_vang_ten or set()
+    to_vang = [(i, len(values[1])) for i, r in enumerate(values)
+               if i >= 3 and len(r) > 1 and r[1] in ten_vang]
+    if block_rows:
+        start_row = len(values) + 2                       # cách bảng 1 dòng trống
+        ws.update(values=block_rows,
+                  range_name=f"A{start_row}:{_col_letter(block_w)}{start_row + len(block_rows) - 1}",
+                  value_input_option="USER_ENTERED")
+        extra = (start_row - 1, len(block_rows), block_w, 0)   # 0-based
+        to_vang += [(start_row - 1 + i, block_w) for i, r in enumerate(block_rows)
+                    if i >= 2 and len(r) > 1 and r[1] in ten_vang]
+    _style_bc02(ss, ws, n_rows=len(values), n_cols=len(values[1]),
+                extra_block=extra, block_wrap_cols=block_wrap_cols, to_vang=to_vang)
     return ss.url
 
 

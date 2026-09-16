@@ -15,15 +15,19 @@ Nguyên tắc:
        sheet, KỂ CẢ khi kho api_data quá khứ đã được ghi đè mới hơn.
     4. Tab DOANH SỐ PAGE: luôn DỰNG LẠI từ kho api_data -> 7 ngày gần nhất của nó
        phản ánh trạng thái đơn mới nhất.
-    5. CHỐT SỔ CUỐI THÁNG: sang tháng mới (từ mùng 2), script tự gọi lại API MỘT LẦN
-       trọn tháng trước để sửa thưởng lần cuối (bắt đơn hoàn/hủy muộn), đóng dấu
-       "ĐÃ CHỐT SỔ" lên tiêu đề các tab - từ đó không đụng đến tháng đó nữa
-       (kể cả kho api_data của tháng đó).
+    5. CHỐT SỔ CUỐI THÁNG: sang tháng mới, TỪ 11h00 MÙNG 2 (config.CHOT_SO_NGAY /
+       CHOT_SO_GIO) chạy mặc định tự gọi lại API MỘT LẦN trọn tháng trước để sửa
+       thưởng lần cuối (bắt đơn hoàn/hủy muộn), đóng dấu "ĐÃ CHỐT SỔ" lên tiêu đề
+       các tab - từ đó không đụng đến tháng đó nữa (kể cả kho api_data của tháng đó).
+       Lần chạy TRƯỚC mốc đó (9h sáng mùng 1, mùng 2) chỉ báo giờ chốt, không sửa gì
+       ở tháng trước; máy tắt đúng giờ thì lần chạy đầu tiên sau mốc sẽ chốt bù.
 
 HAI TRANG TÍNH riêng, mỗi bộ phận 1 file, KHÔNG lẫn thông tin của nhau
 (.env: GOOGLE_SHEET_ID = Sale, GOOGLE_SHEET_ID_CSKH = CSKH):
 - Trang tính Sale: "Thưởng Sale GR", "Doanh số Sale" (ma trận thưởng/doanh số ngày)
-  và "BC02 Thưởng DS Sale" (thưởng doanh số tháng, cột % nhập tay giữ nguyên).
+  và "BC02 Thưởng DS Sale" (thưởng doanh số tháng; cột % Thưởng TỰ TÍNH từ 2 bảng
+  CHẤM CÔNG tháng - NT/TK trước, không có tên mới sang OCP, xem cham_cong.py - người
+  không có trên cả 2 bảng giữ % trên sheet).
 - Trang tính CSKH: "Thưởng CSKH GR", "Doanh số CSKH", "BC02 Thưởng DS CSKH".
 Lần chạy đầu sau khi tách: tự CHUYỂN dữ liệu CSKH của tháng chưa khóa từ trang tính cũ
 sang trang tính mới, tách các tab gộp cũ ("Doanh số NV", "BC02 ... Sale- CSKH")
@@ -35,10 +39,13 @@ import sys
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+import cham_cong
 import config
 import google_sheet
+from bc02_thuong_ds import ap_cham_cong as bc02_ap_cham_cong
 from bc02_thuong_ds import build_table as bc02_build_table
 from bc02_thuong_ds import dem_hoan_thang_truoc
+from bc02_thuong_ds import doc_cham_cong as bc02_doc_cham_cong
 from bc02_thuong_ds import parse_old_manual as bc02_parse_old_manual
 from bc02_thuong_ds import read_gr_bonus_totals
 from doanh_thu import (clean_name, load_staff, matched_departments,
@@ -56,6 +63,14 @@ GHI_CHU_THUONG = ("Lưu ý: ô Chủ nhật của người có 'Đăng kí làm'
                   "thưởng doanh số - xem tách riêng ở bảng Đăng kí làm phía dưới.")
 SETTLE_DELAY_DAYS = 2      # số ngày trễ trước khi một ngày được đưa vào bảng
 FETCH_WINDOW_DAYS = 7      # mỗi lần chạy gọi API ghi đè kho bấy nhiêu ngày gần nhất
+
+
+def moc_chot_so(year: int, month: int, tz: ZoneInfo) -> datetime:
+    """Thời điểm tự CHỐT SỔ tháng (year, month) khi chạy mặc định: CHOT_SO_GIO ngày mùng
+    CHOT_SO_NGAY của tháng KẾ TIẾP (config.py, mặc định 11h00 mùng 2). Trước mốc này
+    chạy mặc định không đụng tháng đó."""
+    thang_sau = (date(year, month, 1) + timedelta(days=32)).replace(day=config.CHOT_SO_NGAY)
+    return datetime.combine(thang_sau, time(*config.CHOT_SO_GIO), tzinfo=tz)
 
 
 def bonus_for(doanh_so: int, day: date, tiers_cfg: dict) -> int:
@@ -226,7 +241,9 @@ def parse_old_bc02_stats(old_values: list[list[str]] | None) -> dict[str, dict]:
 
     for row in old_values[2:]:
         name = row[i_name].strip() if i_name < len(row) else ""
-        if not name or name == "Tổng":
+        if not name:
+            break        # hết bảng (dòng trống) - dưới đó là khối "CHẤM CÔNG" (cũng có cột tên)
+        if name == "Tổng":
             continue
         result[name] = {"chot": num(row, i_chot), "hoan": num(row, i_hoan),
                         "ds": num(row, i_ds)}
@@ -758,6 +775,8 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
     # Đơn hoàn tháng trước: TẠM THỜI để 0 theo yêu cầu
     # (bật lại: hoan_truoc = dem_hoan_thang_truoc(client, shop_id, year, month, tz))
     hoan_truoc: dict[str, int] = {}
+    # Cột % Thưởng = từ bảng CHẤM CÔNG tháng (lỗi -> giữ % cũ, KHÔNG chặn cập nhật)
+    cham_cong_loi = bc02_doc_cham_cong(month, year)
     da_ghi_bc02: set[str] = set()
     for keyword, label in GROUPS:
         roster = group_roster(staff, keyword)
@@ -776,11 +795,16 @@ def run_month(client: PancakeClient, shop_id: str, staff: dict, tz: ZoneInfo,
                     s["hoan"] += cell["hoan"]
                     s["ds"] += cell["ds_all"]   # DS bán hàng = DOANH SỐ (chốt + hoàn)
             stats[uid] = s
+        pct_cc, block_cc, vang_cc = bc02_ap_cham_cong(keyword, label, roster, month, year,
+                                                      cham_cong_loi, stats=stats)
         values = bc02_build_table(month, year, roster, stats,
                                   bc02_parse_old_manual(old_bc02[keyword]), title_suffix,
                                   bonus_totals=bonus_totals, hoan_truoc=hoan_truoc,
-                                  group_label=label)
-        google_sheet.write_bc02_table(bc02_tabs[keyword], values, nhom=keyword)
+                                  group_label=label, pct_cham_cong=pct_cc)
+        google_sheet.write_bc02_table(bc02_tabs[keyword], values, nhom=keyword,
+                                      block_rows=block_cc,
+                                      block_wrap_cols=cham_cong.KHOI_COT_XUONG_DONG,
+                                      to_vang_ten=vang_cc)
         da_ghi_bc02.add(keyword)
         tong_chot = sum(s["chot"] for s in stats.values())
         tong_hoan = sum(s["hoan"] for s in stats.values())
@@ -835,12 +859,18 @@ def main() -> None:
     run_month(client, shop_id, staff, tz, today, year, month,
               finalize=explicit and today > month_end, recompute=tinh_lai)
 
-    # Chạy mặc định đầu tháng mới -> tự chốt sổ tháng trước (nếu tab tồn tại và chưa khóa)
+    # Chạy mặc định đầu tháng mới -> tự chốt sổ tháng trước (nếu tab tồn tại và chưa khóa),
+    # CHỈ từ mốc 11h00 mùng 2 (config.CHOT_SO_GIO / CHOT_SO_NGAY). Lần chạy sớm hơn
+    # (9h sáng mùng 1, mùng 2) chỉ báo giờ chốt, không đụng tháng trước.
     if not explicit:
         prev_last = first - timedelta(days=1)
-        if today >= prev_last + timedelta(days=SETTLE_DELAY_DAYS):
+        moc = moc_chot_so(prev_last.year, prev_last.month, tz)
+        if datetime.now(tz) >= moc:
             run_month(client, shop_id, staff, tz, today,
                       prev_last.year, prev_last.month, finalize=True, only_if_exists=True)
+        else:
+            print(f"Tháng {prev_last.month:02d}.{prev_last.year}: sẽ tự CHỐT SỔ lúc "
+                  f"{moc.strftime('%H:%M ngày %d/%m/%Y')} - lần chạy này chưa đụng đến.")
 
     # Tháng mới nhất xếp bên TRÁI ở cả 2 trang tính
     google_sheet.sap_xep_tab("sale")

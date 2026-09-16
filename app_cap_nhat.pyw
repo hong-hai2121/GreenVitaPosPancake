@@ -2,9 +2,14 @@
 """Ứng dụng desktop CẬP NHẬT THƯỞNG GREENVITA (Pancake POS -> Google Sheet).
 
 - Nháy đúp file này -> mở cửa sổ: tự chạy cập nhật ngay, hiển thị tiến trình,
-  rồi ĐẾM NGƯỢC tới 9h sáng hôm sau và tự chạy tiếp.
+  rồi ĐẾM NGƯỢC tới lần chạy gần nhất và tự chạy tiếp. Có 2 lịch:
+    + 9h sáng hằng ngày (chỉnh được trên giao diện): cập nhật tháng hiện tại;
+    + 11h00 mùng 2 hằng tháng (config.CHOT_SO_NGAY / CHOT_SO_GIO): CHỐT SỔ tháng
+      trước - thuong_thang.py chỉ chốt từ mốc này, chốt xong tab bị khóa, không sửa nữa.
 - Nút bấm: Cập nhật ngay / Sheet Sale / Sheet CSKH / Mở file log;
-  ô "Link lịch trực CN" có nút Lưu link và Mở lịch trực (mở trang tính đang dùng).
+  ô "Link lịch trực CN", "Link chấm công 1" (file NT/TK) và "Link chấm công 2"
+  (file OCP - không có tên ở bảng 1 thì tìm ở đây) đều có nút Lưu link (ghi .env)
+  và nút Mở (mở trang tính trên trình duyệt).
 - Chế độ chạy ngầm cho Task Scheduler:  pythonw app_cap_nhat.pyw --ngam
   (chạy 1 lần, ghi log rồi thoát - không mở cửa sổ).
 
@@ -27,6 +32,8 @@ LOG_FILE = LOG_DIR / "cap_nhat.log"
 CAI_DAT_FILE = BASE_DIR / "cai_dat_app.json"
 ENV_FILE = BASE_DIR / ".env"
 GIO_CHAY_MAC_DINH = (9, 0)       # giờ:phút tự chạy hằng ngày (mặc định 9h sáng)
+CHOT_SO_MAC_DINH = (2, 11, 0)    # (mùng, giờ, phút) chốt sổ tháng trước - dự phòng khi
+                                 # không đọc được config.py
 
 
 def doc_env(key: str) -> str:
@@ -81,6 +88,32 @@ def lan_chay_tiep_theo(now: datetime, gio: int, phut: int) -> datetime:
     return target
 
 
+def moc_chot_so() -> tuple[int, int, int]:
+    """(mùng, giờ, phút) tự chốt sổ tháng trước - đọc config.py (CHOT_SO_NGAY / CHOT_SO_GIO),
+    cùng mốc thuong_thang.py dùng để quyết định có chốt hay không."""
+    try:
+        import config
+        return int(config.CHOT_SO_NGAY), int(config.CHOT_SO_GIO[0]), int(config.CHOT_SO_GIO[1])
+    except Exception:
+        return CHOT_SO_MAC_DINH
+
+
+def lan_chot_so_tiep_theo(now: datetime) -> datetime:
+    """Lần CHỐT SỔ tự động tiếp theo: 11h00 mùng 2 gần nhất còn ở sau `now`."""
+    ngay, gio, phut = moc_chot_so()
+    target = now.replace(day=ngay, hour=gio, minute=phut, second=0, microsecond=0)
+    if target <= now:
+        target = (now.replace(day=1) + timedelta(days=32)).replace(
+            day=ngay, hour=gio, minute=phut, second=0, microsecond=0)
+    return target
+
+
+def thang_chot_so(lan_chot: datetime) -> str:
+    """Tháng sẽ được chốt ở lần chạy `lan_chot` (= tháng liền trước), dạng 09.2026."""
+    truoc = lan_chot.replace(day=1) - timedelta(days=1)
+    return truoc.strftime("%m.%Y")
+
+
 def chay_cap_nhat(on_line) -> int:
     """Chạy thuong_thang.py, gọi on_line(dòng) cho từng dòng, ghi log. Trả về mã lỗi."""
     LOG_DIR.mkdir(exist_ok=True)
@@ -119,16 +152,16 @@ def chay_giao_dien() -> None:
             self.dang_chay = False
             self.hang_doi: queue.Queue = queue.Queue()
             self.gio_chay, self.phut_chay = doc_gio_chay()
-            self.lan_tiep_theo = lan_chay_tiep_theo(datetime.now(),
-                                                    self.gio_chay, self.phut_chay)
+            self.bat_dau_luc = datetime.now()      # lúc bắt đầu lần chạy gần nhất
+            self.tinh_lan_tiep_theo(datetime.now())
 
             root.title("Cập Nhật Thưởng GreenVita")
             # Hiện cửa sổ ở CHÍNH GIỮA màn hình
-            w, h = 720, 520
+            w, h = 720, 595
             x = (root.winfo_screenwidth() - w) // 2
             y = (root.winfo_screenheight() - h) // 2
             root.geometry(f"{w}x{h}+{x}+{y}")
-            root.minsize(600, 420)
+            root.minsize(600, 495)
             root.configure(bg=XANH_NHAT)
 
             # --- Tiêu đề ---
@@ -165,19 +198,16 @@ def chay_giao_dien() -> None:
                        font=("Segoe UI", 11), textvariable=self.bien_phut, wrap=True,
                        command=self.doi_gio, justify="center").grid(row=0, column=3)
 
-            # --- Link lịch trực Chủ nhật (sửa được, lưu vào .env) ---
-            khung_lt = tk.Frame(root, bg=XANH_NHAT)
-            khung_lt.pack(pady=(2, 2))
-            tk.Label(khung_lt, text="Link lịch trực CN:", font=("Segoe UI", 10),
-                     fg=XAM, bg=XANH_NHAT).grid(row=0, column=0, padx=(0, 6))
-            self.bien_lich_truc = tk.StringVar(
-                value=doc_env("GOOGLE_SHEET_ID_LICH_TRUC"))
-            tk.Entry(khung_lt, textvariable=self.bien_lich_truc, width=46,
-                     font=("Segoe UI", 9)).grid(row=0, column=1, padx=(0, 6))
-            ttk.Button(khung_lt, text=" Lưu link ",
-                       command=self.luu_link_lich_truc).grid(row=0, column=2)
-            ttk.Button(khung_lt, text=" Mở lịch trực ",
-                       command=self.mo_lich_truc).grid(row=0, column=3, padx=(6, 0))
+            # --- Link lịch trực Chủ nhật + 2 link chấm công (sửa được, lưu vào .env) ---
+            self.bien_lich_truc = self.tao_hang_link(
+                root, "Link lịch trực CN:", "GOOGLE_SHEET_ID_LICH_TRUC",
+                " Mở lịch trực ", "lịch trực")
+            self.bien_cham_cong = self.tao_hang_link(
+                root, "Link chấm công 1:", "GOOGLE_SHEET_ID_CHAM_CONG",
+                " Mở chấm công 1 ", "chấm công 1")
+            self.bien_cham_cong_2 = self.tao_hang_link(
+                root, "Link chấm công 2:", "GOOGLE_SHEET_ID_CHAM_CONG_2",
+                " Mở chấm công 2 ", "chấm công 2")
 
             # --- Nút ---
             khung_nut = tk.Frame(root, bg=XANH_NHAT)
@@ -199,12 +229,15 @@ def chay_giao_dien() -> None:
                 root, font=("Consolas", 10), state="disabled", wrap="word",
                 bg="white", relief="flat", borderwidth=6)
             self.khung_log.pack(fill="both", expand=True, padx=12, pady=(6, 12))
-            # Màu dòng thông báo lịch trực: lỗi đỏ / kết nối OK xanh
+            # Màu dòng thông báo lịch trực / chấm công: lỗi đỏ / kết nối OK xanh
             self.khung_log.tag_configure("do", foreground=DO)
             self.khung_log.tag_configure("xanh", foreground="#1E8E3E")
 
             self.ghi("Chào mừng! Bấm 'Cập nhật ngay' để chạy thủ công,")
-            self.ghi("hoặc chờ đồng hồ đếm ngược - đến giờ hẹn ứng dụng tự cập nhật.\n")
+            self.ghi("hoặc chờ đồng hồ đếm ngược - đến giờ hẹn ứng dụng tự cập nhật.")
+            ngay, gio, phut = moc_chot_so()
+            self.ghi(f"Chốt sổ tháng trước tự chạy lúc {gio:02d}:{phut:02d} mùng {ngay} "
+                     f"hằng tháng - chốt xong tab tháng đó bị khóa, không sửa nữa.\n")
             self.cap_nhat_nhan_lan_sau()
 
             self.root.after(200, self.vong_lap)
@@ -218,58 +251,95 @@ def chay_giao_dien() -> None:
             except ValueError:
                 return
             luu_gio_chay(self.gio_chay, self.phut_chay)
-            self.lan_tiep_theo = lan_chay_tiep_theo(datetime.now(),
-                                                    self.gio_chay, self.phut_chay)
+            self.tinh_lan_tiep_theo(datetime.now())
             self.cap_nhat_nhan_lan_sau()
+
+        def tinh_lan_tiep_theo(self, now: datetime, bat_dau: datetime | None = None) -> None:
+            """2 lịch tự chạy; đồng hồ đếm ngược tới lịch nào gần hơn.
+
+            Lịch chốt sổ tính từ `bat_dau` (lúc BẮT ĐẦU lần chạy vừa rồi): lần chạy tay
+            bắt đầu 10h58 kéo dài qua 11h00 mùng 2 thì vẫn còn lượt chốt sổ 11h00 (lần
+            chạy đó chưa đủ giờ nên thuong_thang.py chưa chốt)."""
+            self.lan_hang_ngay = lan_chay_tiep_theo(now, self.gio_chay, self.phut_chay)
+            self.lan_chot_so = lan_chot_so_tiep_theo(bat_dau or now)
+            self.lan_tiep_theo = min(self.lan_hang_ngay, self.lan_chot_so)
 
         def cap_nhat_nhan_lan_sau(self) -> None:
             self.lb_lan_sau.config(
-                text=f"Lần cập nhật tự động tiếp theo: "
-                     f"{self.lan_tiep_theo.strftime('%H:%M ngày %d/%m/%Y')}")
+                text=f"Cập nhật hằng ngày tiếp theo: "
+                     f"{self.lan_hang_ngay.strftime('%H:%M ngày %d/%m/%Y')}   |   "
+                     f"Chốt sổ tháng {thang_chot_so(self.lan_chot_so)}: "
+                     f"{self.lan_chot_so.strftime('%H:%M ngày %d/%m/%Y')}")
 
         # ------------------------------------------------------------------
         def ghi(self, text: str) -> None:
             tag = ()
-            if "[LICH TRUC][LOI]" in text:
+            if "[LICH TRUC][LOI]" in text or "[CHAM CONG][LOI]" in text:
                 tag = ("do",)
-            elif "[LICH TRUC][OK]" in text or "Đã lưu link lịch trực" in text:
+            elif ("[LICH TRUC][OK]" in text or "[CHAM CONG][OK]" in text
+                  or "Đã lưu link" in text):
                 tag = ("xanh",)
             self.khung_log.configure(state="normal")
             self.khung_log.insert("end", text + "\n", tag)
             self.khung_log.see("end")
             self.khung_log.configure(state="disabled")
 
-        def luu_link_lich_truc(self) -> None:
-            sheet_id = rut_id_sheet(self.bien_lich_truc.get())
-            if not sheet_id:
-                self.ghi("Chưa nhập link/ID lịch trực.")
-                return
-            luu_env("GOOGLE_SHEET_ID_LICH_TRUC", sheet_id)
-            self.bien_lich_truc.set(sheet_id)
-            self.ghi(f"Đã lưu link lịch trực (ID: {sheet_id}) - áp dụng từ lần cập nhật sau.")
+        def tao_hang_link(self, root, nhan: str, env_key: str,
+                          ten_nut_mo: str, ten: str):
+            """Tạo 1 hàng: nhãn + ô nhập link/ID + nút Lưu link + nút Mở.
 
-        def mo_lich_truc(self) -> None:
-            """Mở trang tính Lịch trực đang dùng trên trình duyệt (link trong ô bên cạnh)."""
-            sheet_id = rut_id_sheet(self.bien_lich_truc.get()) or doc_env(
-                "GOOGLE_SHEET_ID_LICH_TRUC")
+            Giá trị đọc từ .env (env_key); trả về StringVar gắn với ô nhập.
+            """
+            khung = tk.Frame(root, bg=XANH_NHAT)
+            khung.pack(pady=(2, 2))
+            tk.Label(khung, text=nhan, font=("Segoe UI", 10), fg=XAM, bg=XANH_NHAT,
+                     width=17, anchor="e").grid(row=0, column=0, padx=(0, 6))
+            bien = tk.StringVar(value=doc_env(env_key))
+            tk.Entry(khung, textvariable=bien, width=46,
+                     font=("Segoe UI", 9)).grid(row=0, column=1, padx=(0, 6))
+            ttk.Button(khung, text=" Lưu link ", width=10,
+                       command=lambda: self.luu_link(bien, env_key, ten)
+                       ).grid(row=0, column=2)
+            ttk.Button(khung, text=ten_nut_mo, width=15,
+                       command=lambda: self.mo_link(bien, env_key, ten)
+                       ).grid(row=0, column=3, padx=(6, 0))
+            return bien
+
+        def luu_link(self, bien, env_key: str, ten: str) -> None:
+            """Lưu link/ID trong ô nhập vào .env (nhận cả link đầy đủ lẫn ID trần)."""
+            sheet_id = rut_id_sheet(bien.get())
             if not sheet_id:
-                self.ghi("Chưa có link/ID lịch trực để mở.")
+                self.ghi(f"Chưa nhập link/ID {ten}.")
+                return
+            luu_env(env_key, sheet_id)
+            bien.set(sheet_id)
+            self.ghi(f"Đã lưu link {ten} (ID: {sheet_id}) - áp dụng từ lần cập nhật sau.")
+
+        def mo_link(self, bien, env_key: str, ten: str) -> None:
+            """Mở trang tính đang dùng trên trình duyệt (link trong ô bên cạnh)."""
+            sheet_id = rut_id_sheet(bien.get()) or doc_env(env_key)
+            if not sheet_id:
+                self.ghi(f"Chưa có link/ID {ten} để mở.")
                 return
             webbrowser.open(f"https://docs.google.com/spreadsheets/d/{sheet_id}")
-            self.ghi(f"Đã mở lịch trực (ID: {sheet_id}) trên trình duyệt.")
+            self.ghi(f"Đã mở {ten} (ID: {sheet_id}) trên trình duyệt.")
 
         def bam_cap_nhat(self) -> None:
             if not self.dang_chay:
                 self.bat_dau_cap_nhat()
 
-        def bat_dau_cap_nhat(self) -> None:
+        def bat_dau_cap_nhat(self, chot_so: bool = False) -> None:
+            """chot_so: lượt chạy theo lịch 11h mùng 2 (thuong_thang.py sẽ chốt sổ tháng trước)."""
             if self.dang_chay:
                 return
             self.dang_chay = True
+            self.bat_dau_luc = datetime.now()
             self.nut_chay.state(["disabled"])
-            self.lb_trang_thai.config(text="ĐANG CHẠY CẬP NHẬT ...", fg=CAM)
+            viec = (f"CHỐT SỔ THÁNG {thang_chot_so(self.lan_chot_so)}" if chot_so
+                    else "CẬP NHẬT")
+            self.lb_trang_thai.config(text=f"ĐANG CHẠY {viec} ...", fg=CAM)
             self.ghi("=" * 66)
-            self.ghi(f"ĐANG CHẠY CẬP NHẬT ... ({datetime.now().strftime('%d/%m/%Y %H:%M:%S')})")
+            self.ghi(f"ĐANG CHẠY {viec} ... ({self.bat_dau_luc.strftime('%d/%m/%Y %H:%M:%S')})")
             threading.Thread(target=self._worker, daemon=True).start()
 
         def _worker(self) -> None:
@@ -296,7 +366,7 @@ def chay_giao_dien() -> None:
             now = datetime.now()
             if not self.dang_chay:
                 if now >= self.lan_tiep_theo:
-                    self.bat_dau_cap_nhat()
+                    self.bat_dau_cap_nhat(chot_so=now >= self.lan_chot_so)
                 else:
                     con_lai = self.lan_tiep_theo - now
                     h, du = divmod(int(con_lai.total_seconds()), 3600)
@@ -307,8 +377,7 @@ def chay_giao_dien() -> None:
         def _xong(self, code: int) -> None:
             self.dang_chay = False
             self.nut_chay.state(["!disabled"])
-            self.lan_tiep_theo = lan_chay_tiep_theo(datetime.now(),
-                                                    self.gio_chay, self.phut_chay)
+            self.tinh_lan_tiep_theo(datetime.now(), bat_dau=self.bat_dau_luc)
             gio = datetime.now().strftime("%H:%M:%S")
             if code == 0:
                 self.ghi(f"HOÀN TẤT lúc {gio}\n")

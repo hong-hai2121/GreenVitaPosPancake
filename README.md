@@ -66,6 +66,7 @@ Kết quả:
 
 ```powershell
 python thuong_thang.py            # chạy hàng ngày: cập nhật cả 5 tab + tự chốt sổ tháng trước
+                                  # (chỉ từ 11h00 mùng 2 tháng sau, sớm hơn thì chưa đụng)
 python thuong_thang.py 2026-08    # tháng đã qua: CHỐT SỔ ngay (tính lại cả tháng rồi khóa)
 python thuong_thang.py --tinh-lai # tính lại MỌI ngày của tháng hiện tại theo quy tắc hiện
                                   # hành (không khóa) - dùng sau khi đổi mốc thưởng/phụ cấp
@@ -101,13 +102,14 @@ Trang tính **Sale** (không có thông tin CSKH):
    `api_data/`, xếp theo tổng tháng giảm dần; trang tính CSKH có tab
    "Doanh số CSKH Page ..." lọc theo CSKH)
 4. **BC02 Thưởng DS Sale T09.2026** - thưởng doanh số tháng bộ phận Sale
-   (giữ cột % nhập tay)
+   (cột % Thưởng tự tính từ bảng CHẤM CÔNG tháng, kèm khối "CHẤM CÔNG" để soát)
 
 Trang tính **CSKH** (không có thông tin Sale):
 4. **Thưởng CSKH GR T09.2026** - thưởng ngày bộ phận CSKH (cũng kèm khối
    "ĐĂNG KÍ LÀM CHỦ NHẬT" của bộ phận CSKH)
 5. **Doanh số CSKH T09.2026** - ma trận DOANH SỐ ngày nhân viên CSKH
 6. **BC02 Thưởng DS CSKH T09.2026** - thưởng doanh số tháng bộ phận CSKH
+   (cột % Thưởng tự tính từ bảng CHẤM CÔNG tháng, kèm khối "CHẤM CÔNG" như Sale)
 
 Lần chạy đầu sau khi tách: dữ liệu CSKH của tháng chưa khóa được tự CHUYỂN từ trang
 tính cũ sang trang tính CSKH (kế thừa số đã chốt); các tab gộp cũ ("Doanh số NV",
@@ -126,10 +128,14 @@ Logic "chốt ngày, chốt sổ":
 - **Tab Doanh số Page luôn dựng lại từ kho** - 7 ngày gần nhất của nó phản ánh
   trạng thái đơn mới nhất (có thể lệch nhẹ với ma trận NV ở 7 ngày cuối, vì ma
   trận NV đã chốt còn Page thì cập nhật tiếp)
-- **Chốt sổ cuối tháng**: từ mùng 2 tháng sau, chạy mặc định sẽ tự gọi lại API một lần
-  trọn tháng trước để sửa thưởng lần cuối (bắt đơn hoàn/hủy muộn), đóng dấu
-  **"ĐÃ CHỐT SỔ"** lên tiêu đề các tab - từ đó tab bị khóa, mọi lần chạy sau bỏ qua,
-  kho api_data của tháng đó cũng không bị ghi đè nữa
+- **Chốt sổ cuối tháng**: từ **11h00 mùng 2 tháng sau** (`CHOT_SO_NGAY` / `CHOT_SO_GIO`
+  trong `config.py`), chạy mặc định sẽ tự gọi lại API một lần trọn tháng trước để sửa
+  thưởng lần cuối (bắt đơn hoàn/hủy muộn), đóng dấu **"ĐÃ CHỐT SỔ"** lên tiêu đề các
+  tab - từ đó tab bị khóa, mọi lần chạy sau bỏ qua, kho api_data của tháng đó cũng
+  không bị ghi đè nữa. Lần chạy TRƯỚC mốc đó (9h sáng mùng 1, mùng 2) chỉ in dòng
+  "sẽ tự CHỐT SỔ lúc 11:00 ngày 02/..." và không đụng tháng trước; máy tắt đúng giờ
+  thì lần chạy đầu tiên sau mốc sẽ chốt bù. Muốn chốt ngay không chờ:
+  `python thuong_thang.py 2026-09`
 
 - Ghi vào tab `Thưởng GR T<tháng>.<năm>` trong cùng Google Sheet
 - Cấu trúc: STT | Họ và tên | Bộ phận | từng ngày trong tháng | Tổng tháng; dòng cuối
@@ -169,25 +175,57 @@ python bc02_thuong_ds.py 2026-07    # tháng cụ thể
   khớp theo tên nhân viên
 - Cột công thức trên sheet: Tỷ lệ hoàn = hoàn/(chốt+hoàn); Thực nhận = Thưởng x % Thưởng
   (% trống hiểu là 100%). Công thức dùng dấu `;` vì sheet locale Việt Nam
-- Cột **% Thưởng**: mặc định điền sẵn **100%**, chỉnh tay trên sheet thì
-  chạy lại script vẫn giữ nguyên giá trị đã chỉnh; **Thực nhận = Thưởng x % Thưởng**
+- Cột **% Thưởng** (bộ phận trong `config.CHAM_CONG_AP_DUNG_NHOM`, mặc định cả Sale và CSKH):
+  TỰ TÍNH từ **2 bảng CHẤM CÔNG** - xem `cham_cong.py`:
+  - **Bảng 1 "CHẤM CÔNG NT/TK"** (file Excel trên Drive, `GOOGLE_SHEET_ID_CHAM_CONG`,
+    tab "BCC.<tháng>") tìm trước; nhân viên **không có tên** ở bảng 1 thì tìm sang
+    **bảng 2 "Chấm công OCP"** (Google Sheet, `GOOGLE_SHEET_ID_CHAM_CONG_2`, tab
+    "BCC T<tháng>" / "Tháng <tháng>"), cùng 1 cách tính. Tên gọi 2 bảng đặt ở
+    `config.CHAM_CONG_TEN_BANG`. Bảng nào không đọc được chỉ cảnh báo, vẫn dùng bảng kia.
+  - Tab của tháng chọn theo tên tab + ô THÁNG/NĂM trên header; lệch nhau (tab "Tháng 9"
+    của OCP quên sửa ô THÁNG nên dòng ngày vẫn là tháng 8) thì tin theo tên tab, các cột
+    hiểu là ngày 1..31 của tháng đó và ghi dòng "Lưu ý" dưới khối chấm công.
+  - Ô ngày ghi số = số giờ làm (đủ công 8h); `KL` nghỉ không lương; `P`/`NL`/`CĐ`
+    nghỉ phép / lễ / chế độ có lương, `HV` học việc, `CN`/`CN/2` đi làm Chủ nhật
+    (không trừ); trống = không phải ngày làm.
+  - **Quy đổi ngày nghỉ** = số ngày `KL` + (tổng giờ làm thiếu so với 8h) / 8
+    (làm không đủ 8h thì giờ thiếu cộng dồn, đủ 8h = 1 ngày nghỉ không lương).
+  - Cứ đủ **2 ngày** quy đổi -> **trừ 10%** (4 ngày -> 20% ...), số trong
+    `config.CHAM_CONG_*`. Tên khớp theo tiền tố bỏ dấu (như Lịch trực).
+  - Người KHÔNG có trên cả 2 bảng (đã nghỉ, tên viết khác ...) hoặc không đọc được
+    bảng nào: giữ % đang có trên sheet (nhập tay được), mặc định 100%. Log ghi
+    `[CHAM CONG][OK]` / `[CHAM CONG][LOI]` cho TỪNG bảng như lịch trực.
+  - Người CÓ đơn / doanh số mà không có tên trên bảng chấm công nào thì **cả dòng tô
+    VÀNG** ở bảng BC02 lẫn trong khối chấm công bên dưới - báo hiệu cần sửa tên trên
+    Pancake hoặc trên chấm công cho khớp (tài khoản không có đơn thì không tô).
+  - Dưới bảng có khối **CHẤM CÔNG THÁNG ...**: mỗi tài khoản Pancake 1 dòng - tên
+    trên chấm công, cột **Bảng chấm công** ("CHẤM CÔNG NT/TK" hoặc "Chấm công OCP" =
+    bảng đã lấy số liệu), ngày KL, giờ thiếu, quy đổi, % và chi tiết ngày để soát. Khối
+    CHỈ liệt kê tài khoản có Đơn chốt > 0 hoặc có doanh số trong tháng; ai cả hai
+    = 0 (đã nghỉ, chưa có đơn) thì bỏ ra ngoài khối (tiêu đề khối ghi số bị bỏ qua).
+- **Thực nhận = Thưởng x % Thưởng**
 
-## Ứng dụng desktop + lịch chạy tự động 9h sáng
+## Ứng dụng desktop + lịch chạy tự động (9h sáng hằng ngày, 11h mùng 2 chốt sổ)
 
 **Cách 1 - Ứng dụng GUI (nháy đúp `app_cap_nhat.pyw`):** mở cửa sổ desktop:
 tự chạy cập nhật ngay, hiển thị tiến trình trong khung log, rồi hiện **đồng hồ
-đếm ngược tới 9h sáng hôm sau** và tự chạy tiếp. Có nút **Cập nhật ngay**,
-**Sheet Sale**, **Sheet CSKH**, **Mở file log**; ô *Link lịch trực CN* có nút
-**Lưu link** (ghi vào `.env`) và **Mở lịch trực** (mở trang tính lịch trực
-đang dùng trên trình duyệt).
+đếm ngược tới lần chạy gần nhất** và tự chạy tiếp. Có 2 lịch: **9h sáng hằng ngày**
+(chỉnh được trên giao diện) cập nhật tháng hiện tại, và **11h00 mùng 2 hằng tháng**
+chạy **chốt sổ tháng trước** (dòng dưới đồng hồ ghi rõ cả 2 mốc). Có nút **Cập nhật ngay**,
+**Sheet Sale**, **Sheet CSKH**, **Mở file log**; ba ô *Link lịch trực CN*,
+*Link chấm công 1* (file Excel "CHẤM CÔNG NT/TK") và *Link chấm công 2* (Google Sheet
+"Chấm công OCP 2026") - cả hai dùng tính % Thưởng, bảng 1 tìm trước - đều có
+nút **Lưu link** (ghi vào `.env`, nhận cả link đầy đủ lẫn ID) và nút **Mở ...**
+(mở trang tính đang dùng trên trình duyệt).
 - Tạo icon trên Desktop (chạy 1 lần, hoặc chạy lại khi đổi máy/đổi thư mục):
   `python tao_loi_tat.py` -> vẽ `icon_app.ico` và tạo lối tắt
   **GreenVita - Cập nhật thưởng** trên Desktop (chạy bằng `pythonw`, không hiện cửa sổ đen).
 
 **Cách 2 - Chạy ngầm dự phòng:** Task Scheduler của Windows có task
-**GreenVita_CapNhatThuong** chạy `pythonw app_cap_nhat.pyw --ngam` lúc **9:00 sáng**
-mỗi ngày (máy bật muộn hơn thì tự chạy bù). Hai cách chạy trùng nhau không sao -
-script tự phát hiện "không có ngày mới" và bỏ qua.
+**GreenVita_CapNhatThuong** chạy `pythonw app_cap_nhat.pyw --ngam` với 2 lịch kích hoạt:
+**9:00 sáng mỗi ngày** và **11:00 ngày 2 hằng tháng** (chốt sổ tháng trước); máy bật
+muộn hơn thì tự chạy bù. Hai cách chạy trùng nhau không sao - script tự phát hiện
+"không có ngày mới" / "ĐÃ CHỐT SỔ" và bỏ qua.
 - Kết quả mỗi lần chạy ghi vào `logs/cap_nhat.log` (mở bằng VS Code để xem)
 - Quản lý: mở **Task Scheduler** (gõ vào Start menu) → tìm task theo tên; hoặc lệnh:
   - Chạy ngay: `Start-ScheduledTask -TaskName "GreenVita_CapNhatThuong"`

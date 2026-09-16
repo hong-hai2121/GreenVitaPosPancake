@@ -20,6 +20,15 @@ ORDERS_PAGE_SIZE = 1000
 # Giữ dữ liệu thô trong api_data/ của bao nhiêu tháng gần nhất (24 = 2 năm)
 API_DATA_THANG_GIU = 24
 
+# CHỐT SỔ tháng trước: chạy mặc định (thuong_thang.py / app) CHỈ tự chốt từ CHOT_SO_GIO
+# ngày mùng CHOT_SO_NGAY của tháng sau (mặc định 11h00 mùng 2). Lần chạy 9h sáng mùng
+# 1, mùng 2 chỉ báo giờ chốt, KHÔNG đụng tháng trước; đúng 11h mùng 2 app / Task
+# Scheduler chạy lại để chốt (máy tắt lúc đó thì lần chạy đầu tiên sau mốc chốt bù).
+# Đã chốt sổ = tab đóng dấu "ĐÃ CHỐT SỔ", khóa vĩnh viễn, không sửa nữa.
+# CHOT_SO_NGAY phải >= 2 để ngày cuối tháng đủ 2 ngày chờ chốt (SETTLE_DELAY_DAYS).
+CHOT_SO_NGAY = 2
+CHOT_SO_GIO = (11, 0)
+
 # ---- Google Sheets (tùy chọn, dùng với cờ --gsheet) ----
 # File service account (đã copy từ dự án ADS_facebook)
 SERVICE_ACCOUNT_FILE = BASE_DIR / os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "service_account.json")
@@ -31,6 +40,32 @@ GOOGLE_SHEET_ID_CSKH = os.getenv("GOOGLE_SHEET_ID_CSKH", "").strip()
 # (Chủ nhật không đăng ký -> thưởng ngày đó = 0)
 GOOGLE_SHEET_ID_LICH_TRUC = os.getenv(
     "GOOGLE_SHEET_ID_LICH_TRUC", "1QuUke2Lqms0pfYSRz8FdEExSXaSxAFyvUvaq0yuma8c").strip()
+# Bảng chấm công 1: "CHẤM CÔNG NT/TK_2026_GreenVita" (file Excel .xlsx trên Drive, tab
+# "BCC.<n>"; nút "Mở chấm công 1" trên GUI). Là file Office nên KHÔNG đọc được bằng
+# Sheets API/gspread; cham_cong.py tải qua Drive API rồi mở bằng openpyxl.
+GOOGLE_SHEET_ID_CHAM_CONG = os.getenv(
+    "GOOGLE_SHEET_ID_CHAM_CONG", "12Ht00Fy5dvV1QMtmSjPx0zuUZRR6KIhM").strip()
+# Bảng chấm công 2: "Chấm công OCP 2026" (Google Sheet gốc, tab "Tháng <n>" / "BCC T<n>";
+# nút "Mở chấm công 2" trên GUI). Nhân viên KHÔNG có tên ở bảng 1 thì tìm sang bảng 2,
+# cùng 1 cách tính % Thưởng (xem cham_cong.py).
+GOOGLE_SHEET_ID_CHAM_CONG_2 = os.getenv(
+    "GOOGLE_SHEET_ID_CHAM_CONG_2", "1oU7jgxYnOpIaaFGajSsuCy06JCVFs0ToVuHxIvzpRuw").strip()
+# Tên gọi 2 bảng chấm công - ghi ở cột "Bảng chấm công" của khối CHẤM CÔNG dưới bảng BC02
+# để biết % Thưởng của nhân viên lấy từ bảng nào (1 = file NT/TK, 2 = Chấm công OCP)
+CHAM_CONG_TEN_BANG = {1: "CHẤM CÔNG NT/TK", 2: "Chấm công OCP"}
+# % THƯỞNG trên BC02 tính từ bảng chấm công (tab của tháng, xem cham_cong.py):
+#   quy đổi ngày nghỉ = ngày nghỉ KHÔNG LƯƠNG + (giờ làm thiếu so với 8h) / 8
+#   cứ đủ CHAM_CONG_NGAY_NGHI_MOI_BAC ngày -> trừ CHAM_CONG_TRU_MOI_BAC % (không âm)
+CHAM_CONG_GIO_CHUAN = 8               # 1 ngày công = 8 giờ; ô ghi < 8 là làm thiếu giờ
+CHAM_CONG_NGAY_NGHI_MOI_BAC = 2       # nghỉ đủ 2 ngày ...
+CHAM_CONG_TRU_MOI_BAC = 10            # ... trừ 10% thưởng (4 ngày -> 20%, ...)
+# Mã ô -> số ngày nghỉ KHÔNG LƯƠNG (so sau khi bỏ dấu, viết HOA, bỏ khoảng trắng)
+CHAM_CONG_MA_KHONG_LUONG = {"KL": 1.0, "KL/2": 0.5, "X/2": 0.5, "M/2": 0.5}
+# Mã CÓ LƯƠNG / đủ công -> không trừ (P phép, NL nghỉ lễ, CĐ nghỉ chế độ, X/M đủ công,
+# HV học việc, CN / CN/2 đi làm Chủ nhật cả / nửa ngày - bảng OCP hay ghi)
+CHAM_CONG_MA_CO_LUONG = {"P", "P/2", "NL", "CD", "X", "M", "HV", "CN", "CN/2"}
+# Bộ phận áp dụng (tab BC02 của nhóm nào lấy % từ chấm công): cả Sale lẫn CSKH
+CHAM_CONG_AP_DUNG_NHOM = {"sale", "cskh"}
 # Email được chia sẻ quyền chỉnh sửa khi tự tạo sheet mới
 GOOGLE_SHARE_EMAIL = os.getenv("GOOGLE_SHARE_EMAIL", "").strip()
 GOOGLE_SCOPES = [

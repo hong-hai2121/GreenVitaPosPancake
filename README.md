@@ -217,19 +217,31 @@ python bc02_thuong_ds.py 2026-07    # tháng cụ thể
 
 ## Ứng dụng desktop + lịch chạy tự động (9h sáng hằng ngày, 11h mùng 2 chốt sổ)
 
-**Cách 1 - Ứng dụng GUI (nháy đúp `app_cap_nhat.pyw`):** mở cửa sổ desktop:
-tự chạy cập nhật ngay, hiển thị tiến trình trong khung log, rồi hiện **đồng hồ
-đếm ngược tới lần chạy gần nhất** và tự chạy tiếp. Có 2 lịch: **9h sáng hằng ngày**
-(chỉnh được trên giao diện) cập nhật tháng hiện tại, và **11h00 mùng 2 hằng tháng**
-chạy **chốt sổ tháng trước** (dòng dưới đồng hồ ghi rõ cả 2 mốc). Có nút **Cập nhật ngay**,
-**Sheet Sale**, **Sheet CSKH**, **Mở file log**; ba ô *Link lịch trực CN*,
-*Link chấm công 1* (file Excel "CHẤM CÔNG NT/TK") và *Link chấm công 2* (Google Sheet
-"Chấm công OCP 2026") - cả hai dùng tính % Thưởng, bảng 1 tìm trước - đều có
-nút **Lưu link** (ghi vào `.env`, nhận cả link đầy đủ lẫn ID) và nút **Mở ...**
-(mở trang tính đang dùng trên trình duyệt).
+**Cách 1 - Ứng dụng GUI (nháy đúp `app_cap_nhat.pyw`):** mở cửa sổ desktop hiện
+tiến trình trong khung log và **đồng hồ đếm ngược tới lần chạy gần nhất** rồi tự chạy.
+Có 2 lịch: **9h sáng hằng ngày** (chỉnh được trên giao diện) cập nhật tháng hiện tại,
+và **11h00 mùng 2 hằng tháng** chạy **chốt sổ tháng trước** (dòng dưới đồng hồ ghi rõ
+cả 2 mốc). Có nút **Cập nhật ngay**, **Sheet Sale**, **Sheet CSKH**, **Mở file log**;
+ba ô *Link lịch trực CN*, *Link chấm công 1* (file Excel "CHẤM CÔNG NT/TK") và
+*Link chấm công 2* (Google Sheet "Chấm công OCP 2026") - cả hai dùng tính % Thưởng,
+bảng 1 tìm trước - đều có nút **Lưu link** (ghi vào `.env`, nhận cả link đầy đủ lẫn ID)
+và nút **Mở ...** (mở trang tính đang dùng trên trình duyệt).
+- **Chạy nền giống Unikey:** app có icon **GV** ở khay hệ thống (góc phải taskbar,
+  cần `pystray` + `Pillow` trong `requirements.txt`). Bấm **X** chỉ **ẩn cửa sổ xuống
+  khay** - app vẫn chạy, đồng hồ vẫn đếm và vẫn tự cập nhật đúng giờ (lần đầu ẩn có
+  thông báo nhắc). Nháy trái icon khay (hoặc nháy đúp lối tắt trên Desktop lần nữa)
+  thì cửa sổ hiện lại; chuột phải icon có menu **Mở cửa sổ / Cập nhật ngay / Mở file
+  log / Thoát**. Chỉ **Thoát** ở menu này mới tắt hẳn (đang cập nhật dở thì hỏi lại).
+  App chỉ chạy **1 phiên bản**: mở lần 2 chỉ gọi cửa sổ đang chạy lên, không mở trùng
+  (nhận diện qua cổng localhost 47321).
+- **Khởi động cùng Windows:** tick ô **Khởi động cùng Windows (chạy ẩn ở khay)** trên
+  giao diện -> tạo lối tắt **GreenVita - Cập nhật thưởng (khay)** trong thư mục Startup
+  (`shell:startup`) chạy `pythonw app_cap_nhat.pyw --khay`: đăng nhập máy là app tự chạy
+  ẩn ở khay, không hiện cửa sổ. Bỏ tick để tắt (hoặc `python tao_loi_tat.py --bo-khoi-dong`).
 - Tạo icon trên Desktop (chạy 1 lần, hoặc chạy lại khi đổi máy/đổi thư mục):
-  `python tao_loi_tat.py` -> vẽ `icon_app.ico` và tạo lối tắt
-  **GreenVita - Cập nhật thưởng** trên Desktop (chạy bằng `pythonw`, không hiện cửa sổ đen).
+  `python tao_loi_tat.py` -> vẽ `icon_app.ico`, tạo lối tắt **GreenVita - Cập nhật thưởng**
+  trên Desktop (chạy bằng `pythonw`, không hiện cửa sổ đen) VÀ lối tắt khởi động cùng
+  Windows nói trên.
 
 **Cách 2 - Chạy ngầm dự phòng:** Task Scheduler của Windows có task
 **GreenVita_CapNhatThuong** chạy `pythonw app_cap_nhat.pyw --ngam` với 2 lịch kích hoạt:

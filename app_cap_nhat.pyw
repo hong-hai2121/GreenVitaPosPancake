@@ -1,24 +1,35 @@
 # -*- coding: utf-8 -*-
 """Ứng dụng desktop CẬP NHẬT THƯỞNG GREENVITA (Pancake POS -> Google Sheet).
 
-- Nháy đúp file này -> mở cửa sổ: tự chạy cập nhật ngay, hiển thị tiến trình,
-  rồi ĐẾM NGƯỢC tới lần chạy gần nhất và tự chạy tiếp. Có 2 lịch:
+- Nháy đúp file này -> mở cửa sổ hiển thị tiến trình và ĐẾM NGƯỢC tới lần chạy
+  gần nhất rồi tự chạy. Có 2 lịch:
     + 9h sáng hằng ngày (chỉnh được trên giao diện): cập nhật tháng hiện tại;
     + 11h00 mùng 2 hằng tháng (config.CHOT_SO_NGAY / CHOT_SO_GIO): CHỐT SỔ tháng
       trước - thuong_thang.py chỉ chốt từ mốc này, chốt xong tab bị khóa, không sửa nữa.
+- CHẠY NỀN GIỐNG UNIKEY: app có icon ở khay hệ thống (góc phải taskbar). Bấm X đóng
+  cửa sổ thì app chỉ ẨN xuống khay, đồng hồ đếm ngược vẫn chạy và vẫn tự cập nhật
+  đúng giờ. Nháy vào icon khay (hoặc nháy đúp lối tắt trên Desktop lần nữa) thì cửa sổ
+  hiện lại; chuột phải icon khay có menu Mở cửa sổ / Cập nhật ngay / Mở log / Thoát.
+  Chỉ chạy được 1 phiên bản: mở lần 2 chỉ hiện lại cửa sổ đang chạy, không mở trùng.
+- Khởi động cùng Windows: tick "Khởi động cùng Windows" trên giao diện (hoặc chạy
+  python tao_loi_tat.py) -> tạo lối tắt trong thư mục Startup chạy
+  pythonw app_cap_nhat.pyw --khay : đăng nhập máy là app tự chạy ẩn ở khay.
 - Nút bấm: Cập nhật ngay / Sheet Sale / Sheet CSKH / Mở file log;
   ô "Link lịch trực CN", "Link chấm công 1" (file NT/TK) và "Link chấm công 2"
   (file OCP - không có tên ở bảng 1 thì tìm ở đây) đều có nút Lưu link (ghi .env)
   và nút Mở (mở trang tính trên trình duyệt).
 - Chế độ chạy ngầm cho Task Scheduler:  pythonw app_cap_nhat.pyw --ngam
-  (chạy 1 lần, ghi log rồi thoát - không mở cửa sổ).
+  (chạy 1 lần, ghi log rồi thoát - không mở cửa sổ, không dính tới icon khay).
 
+Cần thư viện pystray + Pillow cho icon khay (pip install -r requirements.txt); thiếu thì
+app vẫn chạy bình thường nhưng bấm X là thoát hẳn.
 Mọi lần chạy đều ghi thêm vào logs/cap_nhat.log.
 """
 import json
 import os
 import queue
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -31,9 +42,14 @@ LOG_DIR = BASE_DIR / "logs"
 LOG_FILE = LOG_DIR / "cap_nhat.log"
 CAI_DAT_FILE = BASE_DIR / "cai_dat_app.json"
 ENV_FILE = BASE_DIR / ".env"
+ICO_FILE = BASE_DIR / "icon_app.ico"
 GIO_CHAY_MAC_DINH = (9, 0)       # giờ:phút tự chạy hằng ngày (mặc định 9h sáng)
 CHOT_SO_MAC_DINH = (2, 11, 0)    # (mùng, giờ, phút) chốt sổ tháng trước - dự phòng khi
                                  # không đọc được config.py
+TEN_APP = "Cập Nhật Thưởng GreenVita"
+# Cổng localhost để bảo đảm CHỈ 1 PHIÊN BẢN app chạy: phiên bản đầu giữ cổng này; mở
+# lần 2 thấy cổng bận thì gửi chữ "hien" tới rồi thoát -> phiên bản đầu hiện cửa sổ lên.
+CONG_MOT_PHIEN = 47321
 
 
 def doc_env(key: str) -> str:
@@ -114,8 +130,11 @@ def thang_chot_so(lan_chot: datetime) -> str:
     return truoc.strftime("%m.%Y")
 
 
-def chay_cap_nhat(on_line) -> int:
-    """Chạy thuong_thang.py, gọi on_line(dòng) cho từng dòng, ghi log. Trả về mã lỗi."""
+def chay_cap_nhat(on_line, on_start=None) -> int:
+    """Chạy thuong_thang.py, gọi on_line(dòng) cho từng dòng, ghi log. Trả về mã lỗi.
+
+    on_start(proc): được gọi ngay khi tiến trình con bắt đầu (để GUI giữ tham chiếu,
+    dừng được khi người dùng Thoát giữa chừng)."""
     LOG_DIR.mkdir(exist_ok=True)
     proc = subprocess.Popen(
         [sys.executable, str(BASE_DIR / "thuong_thang.py")],
@@ -123,6 +142,8 @@ def chay_cap_nhat(on_line) -> int:
         text=True, encoding="utf-8", errors="replace",
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+    if on_start:
+        on_start(proc)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"\n==================== {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} ====================\n")
         for line in proc.stdout:
@@ -140,22 +161,58 @@ def chay_ngam() -> None:
 
 
 # ======================================================================
+# Chỉ 1 phiên bản app (single instance) qua cổng localhost
+# ======================================================================
+def giu_cong_mot_phien() -> "socket.socket | None":
+    """Thử giữ cổng CONG_MOT_PHIEN. Được -> trả về socket đang lắng nghe (app là phiên
+    bản duy nhất). Không được (app khác đang giữ) -> trả về None."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", CONG_MOT_PHIEN))
+        s.listen(5)
+        return s
+    except OSError:
+        s.close()
+        return None
+
+
+def bao_phien_dang_chay_hien_len() -> bool:
+    """Gửi "hien" tới phiên bản đang chạy để nó hiện cửa sổ. Trả về True nếu gửi được."""
+    try:
+        with socket.create_connection(("127.0.0.1", CONG_MOT_PHIEN), timeout=2) as c:
+            c.sendall(b"hien")
+        return True
+    except OSError:
+        return False
+
+
+# ======================================================================
 # Giao diện
 # ======================================================================
-def chay_giao_dien() -> None:
+def chay_giao_dien(an_o_khay: bool = False) -> None:
+    """an_o_khay=True (tham số --khay, dùng khi khởi động cùng Windows): mở app nhưng
+    KHÔNG hiện cửa sổ, chỉ có icon ở khay; nháy icon thì cửa sổ mới hiện."""
     import tkinter as tk
-    from tkinter import scrolledtext, ttk
+    from tkinter import messagebox, scrolledtext, ttk
 
     class App:
-        def __init__(self, root: tk.Tk):
+        def __init__(self, root: tk.Tk, cong: "socket.socket | None", an_o_khay: bool):
             self.root = root
             self.dang_chay = False
+            self.tien_trinh: subprocess.Popen | None = None   # thuong_thang.py đang chạy
             self.hang_doi: queue.Queue = queue.Queue()
             self.gio_chay, self.phut_chay = doc_gio_chay()
             self.bat_dau_luc = datetime.now()      # lúc bắt đầu lần chạy gần nhất
             self.tinh_lan_tiep_theo(datetime.now())
+            self.khay = None                       # pystray.Icon (None = không có khay)
+            self.da_bao_an_khay = False            # đã hiện thông báo "app ẩn ở khay" chưa
+            self.cong = cong
 
-            root.title("Cập Nhật Thưởng GreenVita")
+            root.title(TEN_APP)
+            try:
+                root.iconbitmap(str(ICO_FILE))
+            except Exception:
+                pass
             # Hiện cửa sổ ở CHÍNH GIỮA màn hình
             w, h = 720, 595
             x = (root.winfo_screenwidth() - w) // 2
@@ -163,6 +220,8 @@ def chay_giao_dien() -> None:
             root.geometry(f"{w}x{h}+{x}+{y}")
             root.minsize(600, 495)
             root.configure(bg=XANH_NHAT)
+            # Bấm X: ẩn xuống khay (giống Unikey) thay vì thoát
+            root.protocol("WM_DELETE_WINDOW", self.an_xuong_khay)
 
             # --- Tiêu đề ---
             tk.Label(root, text="CẬP NHẬT THƯỞNG GREENVITA",
@@ -197,6 +256,13 @@ def chay_giao_dien() -> None:
             tk.Spinbox(khung_gio, from_=0, to=59, width=3, format="%02.0f",
                        font=("Segoe UI", 11), textvariable=self.bien_phut, wrap=True,
                        command=self.doi_gio, justify="center").grid(row=0, column=3)
+            # Tick "Khởi động cùng Windows" = có lối tắt --khay trong thư mục Startup
+            self.bien_khoi_dong = tk.BooleanVar(value=self.co_khoi_dong_cung_windows())
+            tk.Checkbutton(khung_gio, text="Khởi động cùng Windows (chạy ẩn ở khay)",
+                           variable=self.bien_khoi_dong, command=self.doi_khoi_dong,
+                           font=("Segoe UI", 10), fg=XAM, bg=XANH_NHAT,
+                           activebackground=XANH_NHAT, selectcolor="white"
+                           ).grid(row=0, column=4, padx=(18, 0))
 
             # --- Link lịch trực Chủ nhật + 2 link chấm công (sửa được, lưu vào .env) ---
             self.bien_lich_truc = self.tao_hang_link(
@@ -237,10 +303,154 @@ def chay_giao_dien() -> None:
             self.ghi("hoặc chờ đồng hồ đếm ngược - đến giờ hẹn ứng dụng tự cập nhật.")
             ngay, gio, phut = moc_chot_so()
             self.ghi(f"Chốt sổ tháng trước tự chạy lúc {gio:02d}:{phut:02d} mùng {ngay} "
-                     f"hằng tháng - chốt xong tab tháng đó bị khóa, không sửa nữa.\n")
+                     f"hằng tháng - chốt xong tab tháng đó bị khóa, không sửa nữa.")
             self.cap_nhat_nhan_lan_sau()
 
+            self.tao_khay()
+            if self.khay is not None:
+                self.ghi("Bấm X chỉ ẨN cửa sổ xuống khay hệ thống (góc phải taskbar) - app "
+                         "vẫn chạy nền và tự cập nhật đúng giờ. Nháy icon khay để mở lại; "
+                         "chuột phải icon -> Thoát để tắt hẳn.\n")
+            else:
+                self.ghi("(Chưa cài pystray/Pillow nên không có icon khay - bấm X là thoát "
+                         "hẳn. Cài: pip install pystray pillow)\n")
+            if self.cong is not None:
+                threading.Thread(target=self._lang_nghe_cong, daemon=True).start()
+            if an_o_khay and self.khay is None:
+                # Không có khay mà lại ẩn thì không cách nào mở lại -> cứ hiện cửa sổ
+                self.root.after(0, self.hien_cua_so)
+
             self.root.after(200, self.vong_lap)
+
+        # ------------------------------------------------------------------
+        # Khay hệ thống (system tray) + ẩn/hiện cửa sổ + thoát
+        # ------------------------------------------------------------------
+        def tao_khay(self) -> None:
+            """Tạo icon ở khay hệ thống bằng pystray, chạy ở luồng riêng.
+
+            Menu của pystray chạy ở luồng khác, KHÔNG được đụng Tk trực tiếp -> mọi
+            hành động chỉ đẩy vào hang_doi, vong_lap (luồng Tk) sẽ xử lý."""
+            try:
+                import pystray
+                from PIL import Image
+            except ImportError:
+                return
+            try:
+                anh = Image.open(ICO_FILE)
+                anh.load()
+            except Exception:
+                from PIL import Image as _Im, ImageDraw
+                anh = _Im.new("RGBA", (64, 64), (0, 0, 0, 0))
+                ImageDraw.Draw(anh).rounded_rectangle((2, 2, 61, 61), radius=14,
+                                                      fill=(31, 122, 58))
+
+            def gui(loai):
+                return lambda: self.hang_doi.put((loai, None))
+
+            menu = pystray.Menu(
+                pystray.MenuItem("Mở cửa sổ", gui("hien"), default=True),
+                pystray.MenuItem("Cập nhật ngay", gui("chay")),
+                pystray.MenuItem("Mở file log", gui("log")),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Thoát", gui("thoat")),
+            )
+            self.khay = pystray.Icon("GreenVita", anh, TEN_APP, menu)
+            threading.Thread(target=self.khay.run, daemon=True).start()
+
+        def dat_ten_khay(self, text: str) -> None:
+            """Tooltip khi rê chuột lên icon khay."""
+            if self.khay is not None:
+                try:
+                    self.khay.title = f"{TEN_APP}\n{text}"[:127]
+                except Exception:
+                    pass
+
+        def an_xuong_khay(self) -> None:
+            """Bấm X: ẩn cửa sổ, app vẫn chạy ở khay. Không có khay thì thoát hẳn."""
+            if self.khay is None:
+                self.thoat()
+                return
+            self.root.withdraw()
+            if not self.da_bao_an_khay:
+                self.da_bao_an_khay = True
+                try:
+                    self.khay.notify("Ứng dụng vẫn chạy ngầm ở khay hệ thống và sẽ tự cập "
+                                     "nhật đúng giờ. Nháy icon để mở lại cửa sổ.", TEN_APP)
+                except Exception:
+                    pass
+
+        def hien_cua_so(self) -> None:
+            """Hiện lại cửa sổ (từ khay, hoặc khi mở app lần 2) và đưa lên trên cùng."""
+            self.root.deiconify()
+            self.root.state("normal")
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.root.after(150, lambda: self.root.attributes("-topmost", False))
+            self.root.focus_force()
+
+        def thoat(self) -> bool:
+            """Thoát hẳn (menu khay). Đang cập nhật dở thì hỏi lại rồi dừng tiến trình con.
+            Trả về True nếu đã thoát thật, False nếu người dùng đổi ý."""
+            if self.dang_chay:
+                self.hien_cua_so()
+                if not messagebox.askyesno(
+                        "Thoát", "Đang cập nhật dở, thoát bây giờ sẽ dừng ngang lần cập "
+                        "nhật này (lần sau chạy lại từ đầu, không mất dữ liệu).\n\nVẫn thoát?",
+                        parent=self.root):
+                    return False
+                if self.tien_trinh is not None and self.tien_trinh.poll() is None:
+                    try:
+                        self.tien_trinh.kill()
+                    except OSError:
+                        pass
+            if self.khay is not None:
+                try:
+                    self.khay.stop()
+                except Exception:
+                    pass
+            if self.cong is not None:
+                try:
+                    self.cong.close()
+                except OSError:
+                    pass
+            self.root.destroy()
+            return True
+
+        def _lang_nghe_cong(self) -> None:
+            """Luồng nền: ai kết nối tới cổng (mở app lần 2) -> yêu cầu hiện cửa sổ."""
+            while True:
+                try:
+                    conn, _ = self.cong.accept()
+                except OSError:
+                    return                       # cổng đã đóng (app thoát)
+                with conn:
+                    self.hang_doi.put(("hien", None))
+
+        # ------------------------------------------------------------------
+        # Khởi động cùng Windows
+        # ------------------------------------------------------------------
+        @staticmethod
+        def co_khoi_dong_cung_windows() -> bool:
+            try:
+                import tao_loi_tat
+                return tao_loi_tat.co_khoi_dong_cung_windows()
+            except Exception:
+                return False
+
+        def doi_khoi_dong(self) -> None:
+            """Tick / bỏ tick 'Khởi động cùng Windows': tạo / xóa lối tắt trong Startup."""
+            try:
+                import tao_loi_tat
+                if self.bien_khoi_dong.get():
+                    lnk = tao_loi_tat.bat_khoi_dong_cung_windows()
+                    self.ghi(f"Đã bật khởi động cùng Windows: đăng nhập máy là app tự chạy "
+                             f"ẩn ở khay. (Lối tắt: {lnk})")
+                else:
+                    tao_loi_tat.tat_khoi_dong_cung_windows()
+                    self.ghi("Đã tắt khởi động cùng Windows.")
+            except Exception as e:
+                self.ghi(f"[LOI] Không đổi được chế độ khởi động cùng Windows: {e}")
+                self.bien_khoi_dong.set(self.co_khoi_dong_cung_windows())
 
         # ------------------------------------------------------------------
         def doi_gio(self) -> None:
@@ -338,27 +548,40 @@ def chay_giao_dien() -> None:
             viec = (f"CHỐT SỔ THÁNG {thang_chot_so(self.lan_chot_so)}" if chot_so
                     else "CẬP NHẬT")
             self.lb_trang_thai.config(text=f"ĐANG CHẠY {viec} ...", fg=CAM)
+            self.dat_ten_khay(f"Đang chạy {viec.lower()} ...")
             self.ghi("=" * 66)
             self.ghi(f"ĐANG CHẠY {viec} ... ({self.bat_dau_luc.strftime('%d/%m/%Y %H:%M:%S')})")
             threading.Thread(target=self._worker, daemon=True).start()
 
         def _worker(self) -> None:
+            def _giu(proc):
+                self.tien_trinh = proc
             try:
-                code = chay_cap_nhat(lambda line: self.hang_doi.put(("line", line)))
+                code = chay_cap_nhat(lambda line: self.hang_doi.put(("line", line)), _giu)
             except Exception as e:
                 self.hang_doi.put(("line", f"LỖI: {e}"))
                 code = 1
+            self.tien_trinh = None
             self.hang_doi.put(("done", code))
 
         def vong_lap(self) -> None:
-            # Nhận output từ tiến trình con
+            # Nhận output từ tiến trình con + lệnh từ icon khay / phiên bản mở lần 2
             try:
                 while True:
                     loai, gia_tri = self.hang_doi.get_nowait()
                     if loai == "line":
                         self.ghi("  " + str(gia_tri))
-                    else:
+                    elif loai == "done":
                         self._xong(int(gia_tri))
+                    elif loai == "hien":
+                        self.hien_cua_so()
+                    elif loai == "chay":
+                        self.bam_cap_nhat()
+                    elif loai == "log":
+                        self.mo_log()
+                    elif loai == "thoat":
+                        if self.thoat():
+                            return           # root đã destroy, không đặt after nữa
             except queue.Empty:
                 pass
 
@@ -384,10 +607,14 @@ def chay_giao_dien() -> None:
                 self.lb_trang_thai.config(
                     text=f"Cập nhật thành công lúc {gio} - đang đếm ngược lần tiếp theo",
                     fg=XANH_DAM)
+                self.dat_ten_khay(f"Cập nhật OK lúc {gio} - lần tiếp: "
+                                  f"{self.lan_tiep_theo.strftime('%H:%M %d/%m')}")
             else:
                 self.ghi(f"CÓ LỖI (mã {code}) lúc {gio} - xem chi tiết phía trên\n")
                 self.lb_trang_thai.config(
                     text=f"Lần chạy {gio} bị lỗi - sẽ thử lại theo lịch", fg=DO)
+                self.dat_ten_khay(f"LỖI lúc {gio} - lần tiếp: "
+                                  f"{self.lan_tiep_theo.strftime('%H:%M %d/%m')}")
             self.cap_nhat_nhan_lan_sau()
 
         def mo_sheet(self, nhom: str = "sale") -> None:
@@ -401,13 +628,28 @@ def chay_giao_dien() -> None:
             if LOG_FILE.exists():
                 os.startfile(str(LOG_FILE))
 
+    # Chỉ 1 phiên bản: app khác đang chạy (ở khay) -> bảo nó hiện cửa sổ rồi thoát
+    cong = giu_cong_mot_phien()
+    if cong is None:
+        if bao_phien_dang_chay_hien_len():
+            return
+        # Cổng bận vì chương trình khác - vẫn chạy, chỉ mất tính năng "1 phiên bản"
+
     root = tk.Tk()
-    App(root)
+    if an_o_khay:
+        root.withdraw()                # ẩn ngay từ đầu, không lóe cửa sổ
+    app = App(root, cong, an_o_khay)
     root.mainloop()
+    # Thoát mainloop nhưng icon khay còn (vd Tk bị đóng bất thường) -> dọn cho sạch
+    if app.khay is not None:
+        try:
+            app.khay.stop()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
     if "--ngam" in sys.argv:
         chay_ngam()
     else:
-        chay_giao_dien()
+        chay_giao_dien(an_o_khay="--khay" in sys.argv)
